@@ -22,6 +22,10 @@ export function listAccounts(provider: string): AccountRow[] {
     .all();
 }
 
+export function setAccountStatus(id: number, status: string): void {
+  db.update(accounts).set({ status }).where(eq(accounts.id, id)).run();
+}
+
 export function getSetting(key: string): string | undefined {
   return db
     .select({ value: settings.value })

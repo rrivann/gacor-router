@@ -1,43 +1,34 @@
-// HTTP routes. Step 1: the request path is wired end-to-end (validate →
-// resolve provider → registry lookup → pool pick) but no provider is
-// registered yet, so every real call bottoms out at 501.
-//
-// Landed:
-// - POST /v1/chat/completions  (OpenAI-compatible)
-// - POST /v1/messages          (Anthropic-compatible)
+// HTTP routes.
+// - POST /v1/chat/completions  (OpenAI-compatible, wired end-to-end)
+// - POST /v1/messages          (Anthropic-compatible, awaiting its converter)
 // - GET  /v1/models
 // Later: /api/* management endpoints for the dashboard.
 
 import { Hono } from "hono";
-import { registry } from "../providers/registry";
+import { registry } from "../providers";
 import { pool } from "../pool";
+import { proxyChat, NoAccountError, UpstreamError } from "../proxy";
+import { toCanonical, toSSE, toCompletion, type OpenAIBody } from "../convert/openai";
 import { resolveModel } from "../lib/model";
 import { errorResponse } from "../lib/http";
-import type { Account, Provider } from "../providers/types";
+import type { Provider } from "../providers/types";
 
 export const api = new Hono();
-
-interface ClientBody {
-  model: string;
-  messages: unknown[];
-  stream?: boolean;
-}
 
 interface Resolved {
   provider: Provider;
   providerName: string;
   model: string;
-  account: Account;
-  body: ClientBody;
+  body: OpenAIBody;
 }
 
-// Everything both formats need before they diverge into translation.
-// Returns a Response on failure, a Resolved context on success.
-async function resolve(raw: unknown): Promise<Response | Resolved> {
+// Validate and route. Returns a Response on failure, a Resolved on success.
+// Account selection happens inside the proxy, which needs to rotate on failure.
+function resolve(raw: unknown): Response | Resolved {
   if (typeof raw !== "object" || raw === null) {
     return errorResponse(400, "invalid_request_error", "body must be a JSON object");
   }
-  const body = raw as Partial<ClientBody>;
+  const body = raw as Partial<OpenAIBody>;
 
   if (typeof body.model !== "string" || body.model.length === 0) {
     return errorResponse(400, "invalid_request_error", "`model` must be a non-empty string", "model");
@@ -67,42 +58,47 @@ async function resolve(raw: unknown): Promise<Response | Resolved> {
     );
   }
 
-  const account = pool.pick(route.provider);
-  if (!account) {
-    return errorResponse(
-      503,
-      "no_available_account_error",
-      `no active account for provider "${route.provider}"`
-    );
-  }
-
-  return {
-    provider,
-    providerName: route.provider,
-    model: route.model,
-    account,
-    body: body as ClientBody,
-  };
+  return { provider, providerName: route.provider, model: route.model, body: body as OpenAIBody };
 }
 
 async function readBody(c: { req: { json: () => Promise<unknown> } }): Promise<Response | Resolved> {
-  let raw: unknown;
   try {
-    raw = await c.req.json();
+    return resolve(await c.req.json());
   } catch {
     return errorResponse(400, "invalid_request_error", "invalid JSON body");
   }
-  return resolve(raw);
+}
+
+// Every account failed, or the upstream itself failed. Both carry the attempt
+// log, which is the only way to see *why* rotation ran out.
+function upstreamFailure(e: unknown): Response {
+  if (e instanceof NoAccountError) {
+    const detail = e.attempts
+      .map((a) => `${a.account.label}: ${a.status} ${a.outcome}`)
+      .join("; ");
+    return errorResponse(
+      503,
+      "no_available_account_error",
+      e.message + (detail ? ` — ${detail}` : "")
+    );
+  }
+  if (e instanceof UpstreamError) {
+    return errorResponse(502, "internal_error", e.message, e.outcome);
+  }
+  return errorResponse(502, "internal_error", e instanceof Error ? e.message : String(e));
 }
 
 api.post("/v1/chat/completions", async (c) => {
   const r = await readBody(c);
   if (r instanceof Response) return r;
-  return errorResponse(
-    501,
-    "not_implemented_error",
-    `resolved ${r.providerName}/${r.model} on account ${r.account.label}, but the OpenAI request path is not wired to the provider yet`
-  );
+
+  const req = toCanonical(r.body, r.model);
+  try {
+    const { stream } = await proxyChat(r.provider, pool, req, { signal: c.req.raw.signal });
+    return req.stream ? toSSE(stream, r.model) : await toCompletion(stream, r.model);
+  } catch (e) {
+    return upstreamFailure(e);
+  }
 });
 
 api.post("/v1/messages", async (c) => {
@@ -111,16 +107,20 @@ api.post("/v1/messages", async (c) => {
   return errorResponse(
     501,
     "not_implemented_error",
-    `resolved ${r.providerName}/${r.model} on account ${r.account.label}, but the Anthropic request path is not wired to the provider yet`
+    `resolved ${r.providerName}/${r.model}, but the Anthropic request format is not converted yet — use /v1/chat/completions`
   );
 });
 
-// Dummy for now: the Provider interface has no model catalogue, so there is
-// nothing truthful to list until providers register one.
-api.get("/v1/models", (c) =>
-  c.json({
-    object: "list",
-    data: [] as { id: string; object: "model"; owned_by: string }[],
-    providers: registry.names(),
-  })
-);
+// Model ids are namespaced `provider/model`, matching what clients must send.
+api.get("/v1/models", (c) => {
+  const data = registry.names().flatMap((name) => {
+    const provider = registry.get(name);
+    return (provider?.models?.() ?? []).map((m) => ({
+      id: `${name}/${m.id}`,
+      object: "model" as const,
+      created: 0,
+      owned_by: m.ownedBy ?? name,
+    }));
+  });
+  return c.json({ object: "list", data });
+});

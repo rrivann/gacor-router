@@ -1,7 +1,7 @@
 // Account pool (enowX-inspired): pick a usable account, skip already-tried
 // ones within the same request, sticky by default with optional round-robin.
 
-import type { Account } from "../providers/types";
+import type { Account, Outcome } from "../providers/types";
 
 export interface AccountRow {
   id: number;
@@ -19,8 +19,17 @@ export class Pool {
 
   constructor(
     private list: (provider: string) => AccountRow[],
-    private rotation: (provider: string) => RotationMode = () => "sticky"
+    private rotation: (provider: string) => RotationMode = () => "sticky",
+    private setStatus: (id: number, status: string) => void = () => {}
   ) {}
+
+  // Reflect a request's outcome back onto the account. "transient" is
+  // deliberately not persisted: the failure isn't the account's fault (5xx, or
+  // a rate limit scoped to one model), so it stays in the pool.
+  react(id: number, outcome: Outcome): void {
+    if (outcome === "dead") this.setStatus(id, "banned");
+    else if (outcome === "exhausted") this.setStatus(id, "exhausted");
+  }
 
   pick(provider: string, tried = new Set<number>()): Account | null {
     const usable = this.list(provider).filter(

@@ -35,13 +35,43 @@ export interface CanonicalMessage {
   toolCallId?: string;
 }
 
+// One streamed tool-call fragment. OpenAI-on-the-wire upstreams send tool
+// arguments as partial JSON strings spread across chunks (`{"pa`, `th":"/tmp`,
+// ...), keyed by `index`; the fragment is passed through as-is so clients can
+// render tool arguments while they stream. Reassembly is the consumer's job.
+export interface ToolCallDelta {
+  index: number;
+  id?: string;
+  name?: string;
+  argsDelta?: string;
+}
+
+export interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 // Normalized stream event — providers decode their wire format into these.
 export interface StreamEvent {
   text?: string;
   reasoning?: string;
-  toolCall?: { id: string; name: string; args: unknown };
-  usage?: { inputTokens: number; outputTokens: number; cacheRead?: number };
-  finish?: "stop" | "tool_use" | "length";
+  toolCalls?: ToolCallDelta[];
+  usage?: Usage;
+  model?: string;
+  finish?: FinishReason;
+}
+
+export type FinishReason = "stop" | "tool_calls" | "length" | "content_filter";
+
+// A model the provider can serve. Upstreams like CodeBuddy expose no live
+// catalogue, so providers ship a static list.
+export interface ModelInfo {
+  id: string;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  ownedBy?: string;
 }
 
 export interface Provider {
@@ -50,4 +80,6 @@ export interface Provider {
   buildRequest(req: ChatRequest, acc: Account): Promise<Request>;
   parseStream(resp: Response, req: ChatRequest): AsyncGenerator<StreamEvent>;
   classify(status: number, body: string): Outcome;
+  // Optional: static catalogue for GET /v1/models.
+  models?(): ModelInfo[];
 }
