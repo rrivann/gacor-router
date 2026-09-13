@@ -2,10 +2,12 @@
 
 import { Hono } from "hono";
 import { env } from "./lib/env";
+import { api } from "./api";
 
 const app = new Hono();
 
 app.get("/health", (c) => c.json({ ok: true, name: "gacor-router" }));
+app.route("/", api);
 
 const server = Bun.serve({
   port: env.port,
