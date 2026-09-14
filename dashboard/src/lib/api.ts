@@ -1,0 +1,222 @@
+// API client for the gacor-router management surface. All calls are same-
+// origin (served by the backend in prod, proxied by Vite in dev) and
+// unauthenticated — the router binds to localhost.
+
+export interface ApiError {
+  error: { message: string; type: string; code: string | null };
+}
+
+export async function fetchApi<T = unknown>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    headers: { "content-type": "application/json", ...options?.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as ApiError;
+      if (body.error?.message) message = body.error.message;
+    } catch {}
+    throw new Error(message);
+  }
+  return res.json() as Promise<T>;
+}
+
+// ── Types mirroring the backend rows ─────────────────────────────
+
+export interface AccountRow {
+  id: number;
+  provider: string;
+  label: string | null;
+  status: string;
+  createdAt: string;
+  hasSecret: boolean;
+  credKeys: string[];
+  usage: CreditUsage | null;
+  usageAt: string | null;
+}
+
+export interface UsagePackage {
+  name: string;
+  subProduct?: string;
+  kind?: "monthly" | "lifetime";
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAtUnix?: number;
+}
+
+export interface CreditUsage {
+  limit: number;
+  used: number;
+  remaining: number;
+  plan?: string;
+  message?: string;
+  resetAtUnix?: number;
+  packages?: UsagePackage[];
+}
+
+export interface RequestLogRow {
+  id: number;
+  createdAt: string;
+  provider: string;
+  model: string | null;
+  accountId: number | null;
+  accountLabel: string | null;
+  stream: boolean;
+  status: string;
+  httpStatus: number | null;
+  outcome: string | null;
+  durationMs: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  creditUsed: number | null;
+  errorMessage: string | null;
+}
+
+export interface RequestLogDetail extends RequestLogRow {
+  requestBody: string | null;
+  responseBody: string | null;
+}
+
+export interface DashboardStats {
+  pool: { total: number; active: number; exhausted: number; banned: number };
+  requests: { total: number; success: number };
+  tokens: { total: number; prompt: number; completion: number };
+}
+
+export interface ModelUsageRow {
+  provider: string;
+  model: string | null;
+  requests: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface ModelInfo {
+  id: string;
+  object: "model";
+  created: number;
+  owned_by: string;
+}
+
+export interface RequestLogEvent {
+  id: number;
+  provider: string;
+  model: string;
+  accountId: number | null;
+  accountLabel: string | null;
+  status: string;
+  httpStatus: number | null;
+  durationMs: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  errorMessage: string | null;
+}
+
+// ── Endpoints ────────────────────────────────────────────────────
+
+export const fetchAccounts = (provider?: string) =>
+  fetchApi<{ data: AccountRow[] }>(`/api/accounts${provider ? `?provider=${provider}` : ""}`);
+
+export const createAccount = (row: {
+  provider: string;
+  label?: string;
+  secret?: string;
+  creds?: Record<string, string>;
+}) => fetchApi<{ success: boolean; id: number }>("/api/accounts", { method: "POST", body: JSON.stringify(row) });
+
+export const deleteAccount = (id: number) =>
+  fetchApi<{ success: boolean }>(`/api/accounts/${id}`, { method: "DELETE" });
+
+export const revealAccount = (id: number) =>
+  fetchApi<{ id: number; secret: string; creds: Record<string, string> }>(`/api/accounts/${id}/reveal`);
+
+export const setAccountStatus = (id: number, status: string) =>
+  fetchApi<{ success: boolean }>(`/api/accounts/${id}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+
+export const refreshUsage = (id: number) =>
+  fetchApi<{ data: CreditUsage }>(`/api/accounts/${id}/usage/refresh`, { method: "POST" });
+
+export const fetchRequestLogs = (opts?: { limit?: number; offset?: number; provider?: string }) => {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  if (opts?.provider) params.set("provider", opts.provider);
+  const qs = params.toString();
+  return fetchApi<{ data: RequestLogRow[] }>(`/api/stats/requests${qs ? `?${qs}` : ""}`);
+};
+
+export const fetchRequestDetail = (id: number) =>
+  fetchApi<{ data: RequestLogDetail }>(`/api/stats/requests/${id}`);
+
+export const fetchDashboardStats = () => fetchApi<DashboardStats>("/api/stats/dashboard");
+
+export const fetchModelUsage = () => fetchApi<{ data: ModelUsageRow[] }>("/api/stats/models");
+
+export const fetchModels = () => fetchApi<{ object: string; data: ModelInfo[] }>("/v1/models");
+
+export const fetchSettings = () => fetchApi<{ data: Record<string, string> }>("/api/settings");
+
+export const saveSettings = (settings: Record<string, string>) =>
+  fetchApi<{ success: boolean; data: Record<string, string> }>("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+
+export const deleteSetting = (key: string) =>
+  fetchApi<{ success: boolean }>(`/api/settings/${encodeURIComponent(key)}`, { method: "DELETE" });
+
+// ── Tunnel ───────────────────────────────────────────────────────
+
+export interface TunnelStatus {
+  enabled: boolean;
+  running: boolean;
+  url: string | null;
+  enabling: boolean;
+  download: { downloading: boolean; progress: number; error: string | null };
+}
+
+export const fetchTunnelStatus = () => fetchApi<TunnelStatus>("/api/tunnel/status");
+
+export const enableTunnel = () =>
+  fetchApi<{ success: boolean; url?: string }>("/api/tunnel/enable", { method: "POST" });
+
+export const disableTunnel = () =>
+  fetchApi<{ success: boolean }>("/api/tunnel/disable", { method: "POST" });
+
+// ── AI Chat sessions ─────────────────────────────────────────────
+
+export interface ChatSessionListRow {
+  id: number;
+  title: string;
+  model: string;
+  msgCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatSessionRow extends ChatSessionListRow {
+  messages: string;
+}
+
+export const fetchChatSessions = () =>
+  fetchApi<{ sessions: ChatSessionListRow[] }>("/api/chat/sessions");
+
+export const fetchChatSession = (id: number) => fetchApi<ChatSessionRow>(`/api/chat/sessions/${id}`);
+
+export const createChatSession = (row: { title?: string; model?: string }) =>
+  fetchApi<{ id: number }>("/api/chat/sessions", { method: "POST", body: JSON.stringify(row) });
+
+export const updateChatSession = (
+  id: number,
+  row: { title?: string; model?: string; messages?: string; msgCount?: number }
+) => fetchApi<{ ok: boolean }>(`/api/chat/sessions/${id}`, { method: "PUT", body: JSON.stringify(row) });
+
+export const deleteChatSession = (id: number) =>
+  fetchApi<{ ok: boolean }>(`/api/chat/sessions/${id}`, { method: "DELETE" });

@@ -15,24 +15,28 @@ format translation, dan token saver. **Single-user, local-first, dipakai sendiri
 
 ## Status saat ini
 
-Commit: `a3d72ce` — scaffold selesai & verified.
+Commit: `a3d72ce` — scaffold selesai & verified. Backend + dashboard UI jalan.
 
 - [x] Folder + git init
 - [x] package.json + deps (hono, drizzle-orm, drizzle-kit, typescript, @types/bun, better-sqlite3)
 - [x] tsconfig strict + ESM
 - [x] Skema DB awal: tabel `accounts` + `settings` (migration 0000, sudah applied)
+- [x] Tabel `request_logs` (migration 0001) — request logging + live events
 - [x] Provider interface + registry (port dari enowX ke TS)
 - [x] Pool (sticky/round-robin, skip tried accounts)
 - [x] Entry Hono + `/health` — **verified jalan**: boot OK, `GET /health` → `{"ok":true,"name":"gacor-router"}`
-- [x] `tsc --noEmit` PASS
+- [x] Route `/v1/chat/completions` (wired end-to-end, stream + non-stream), `/v1/models`, `/v1/messages` (501 stub)
+- [x] Provider pertama: **CodeBuddy** (gzip body, CLI headers, JWT refresh, classify markers)
+- [x] Converter OpenAI (canonical ⇄ wire), peekError JSON-envelope sniffing
+- [x] Management API `/api/*` (accounts CRUD, settings KV, stats) + `/ws` live events
+- [x] **Dashboard UI** (React 19 + Vite + Tailwind v4 di `dashboard/`) — diserve backend
+  di port yang sama; halaman: Dashboard, Accounts, Requests (live feed + drawer), Models, Settings
+- [x] `tsc --noEmit` PASS + 120 tests PASS
 
 Belum ada:
-- [ ] Route `/v1/chat/completions`, `/v1/messages`, `/v1/models`
-- [ ] Provider implementasi (CodeBuddy dulu)
-- [ ] Converter format (OpenAI ↔ Anthropic ↔ canonical)
-- [ ] Dashboard / management API
+- [ ] Converter Anthropic (`/v1/messages` penuh)
+- [ ] Provider tambahan selain CodeBuddy
 - [ ] RTK token saver (port dari 9Router)
-- [ ] Streaming SSE
 
 ## Cara jalanin
 
@@ -47,6 +51,11 @@ bun run typecheck    # tsc --noEmit
 bun run db:generate  # drizzle-kit generate (setelah edit src/db/schema.ts)
 bun run db:migrate   # apply migrations (butuh better-sqlite3 — sudah terpasang)
 bun run db:studio    # GUI drizzle
+
+# Dashboard (React+Vite di dashboard/):
+cd dashboard && bun install    # sekali aja
+bun run build                  # build ke dashboard/dist (diserve backend di :7788)
+bun run dev                    # dev server :5173 dengan proxy /api+/v1+/ws → :7788
 ```
 
 - Port default: **7788** (env `PORT`), host `127.0.0.1`

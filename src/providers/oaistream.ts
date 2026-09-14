@@ -7,6 +7,8 @@ import type { StreamEvent, Usage, ToolCallDelta, FinishReason } from "./types";
 interface RawUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
+  // CodeBuddy/Tencent report the request's credit cost alongside the tokens.
+  credit?: number;
   // Cache metrics arrive in three shapes: flat Tencent/CodeBuddy fields
   // (prompt_cache_hit_tokens / prompt_cache_write_tokens), flat clone fields
   // (cache_read_input_tokens / cache_creation_input_tokens), or nested
@@ -64,10 +66,11 @@ function readUsage(raw: RawUsage | undefined): Usage | undefined {
   const cacheWrite = firstNonZero(raw.cache_creation_input_tokens, raw.prompt_cache_write_tokens);
   const inputTokens = raw.prompt_tokens ?? 0;
   const outputTokens = raw.completion_tokens ?? 0;
-  if (!inputTokens && !outputTokens && !cacheRead && !cacheWrite) return undefined;
+  if (!inputTokens && !outputTokens && !cacheRead && !cacheWrite && !raw.credit) return undefined;
   const usage: Usage = { inputTokens, outputTokens };
   if (cacheRead) usage.cacheRead = cacheRead;
   if (cacheWrite) usage.cacheWrite = cacheWrite;
+  if (raw.credit) usage.credit = raw.credit;
   return usage;
 }
 

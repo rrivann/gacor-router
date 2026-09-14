@@ -11,6 +11,7 @@ import { proxyChat, NoAccountError, UpstreamError } from "../proxy";
 import { toCanonical, toSSE, toCompletion, type OpenAIBody } from "../convert/openai";
 import { resolveModel } from "../lib/model";
 import { errorResponse } from "../lib/http";
+import { loggingTap } from "../lib/logging";
 import type { Provider } from "../providers/types";
 
 export const api = new Hono();
@@ -94,7 +95,10 @@ api.post("/v1/chat/completions", async (c) => {
 
   const req = toCanonical(r.body, r.model);
   try {
-    const { stream } = await proxyChat(r.provider, pool, req, { signal: c.req.raw.signal });
+    const { stream } = await proxyChat(r.provider, pool, req, {
+      signal: c.req.raw.signal,
+      tap: loggingTap({ providerName: r.providerName, model: r.model, req, raw: r.body }),
+    });
     return req.stream ? toSSE(stream, r.model) : await toCompletion(stream, r.model);
   } catch (e) {
     return upstreamFailure(e);

@@ -1,0 +1,1 @@
+ALTER TABLE `request_logs` ADD `credit_used` real;

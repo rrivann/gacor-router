@@ -4,7 +4,17 @@
 
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
-import type { Account, Caps, ChatRequest, ModelInfo, Outcome, Provider, StreamEvent } from "./types";
+import type {
+  Account,
+  Caps,
+  ChatRequest,
+  CreditUsage,
+  ModelInfo,
+  Outcome,
+  Provider,
+  StreamEvent,
+  UsagePackage,
+} from "./types";
 import { parseResponse } from "./oaistream";
 import { codebuddyModels } from "./codebuddy.models";
 
@@ -210,6 +220,9 @@ function hasAny(body: string, markers: string[]): boolean {
 }
 
 export class CodeBuddyProvider implements Provider {
+  // Overridable fetch for the refresh call in tests.
+  constructor(private fetchImpl?: typeof globalThis.fetch) {}
+
   name(): string {
     return "codebuddy";
   }
@@ -267,10 +280,211 @@ export class CodeBuddyProvider implements Provider {
   classify(status: number, body: string): Outcome {
     if (hasAny(body, DEAD_MARKERS)) return "dead";
     if (status < 400) return "ok";
-    if (status === 401 || status === 403) return "dead";
+    // 401/403 mean an unauthenticated request. With a refresh_token account
+    // the pre-flight refresh keeps credentials current, so reaching this means
+    // a transient upstream rejection — rotating won't fix it, and banning
+    // would retire a credential that a retry serves fine. True bans surface
+    // via DEAD_MARKERS above.
+    if (status === 401 || status === 403) return "transient";
     if (status === 429 && hasAny(body, PER_MODEL_RATE_LIMIT_MARKERS)) return "transient";
     if (status === 429 || hasAny(body, QUOTA_MARKERS)) return "exhausted";
     if (status >= 500) return "transient";
     return "ok";
+  }
+
+  // Exchange the offline refresh token for a fresh access token when the
+  // current one expires within REFRESH_WINDOW. The upstream rotates the
+  // refresh token on every exchange, so the new pair must be kept together.
+  async refresh(acc: Account): Promise<Account | null> {
+    const rt = acc.creds.refresh_token?.trim();
+    if (!rt) return acc; // single-token account: nothing to refresh with
+
+    if (!jwtExpiringSoon(bearerFor(acc))) return acc;
+
+    const doFetch = this.fetchImpl ?? globalThis.fetch;
+    let resp: Response;
+    try {
+      resp = await doFetch("https://www.codebuddy.ai/v2/plugin/auth/token/refresh", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": USER_AGENT,
+          "X-Requested-With": "XMLHttpRequest",
+          "X-Domain": "www.codebuddy.ai",
+          "X-Refresh-Token": rt,
+          "X-Auth-Refresh-Source": "plugin",
+          "X-Product": "SaaS",
+        },
+        body: "{}",
+      });
+    } catch {
+      return acc; // network blip — try the old token, let the upstream decide
+    }
+    if (!resp.ok) return null; // refresh token rejected → re-login needed
+
+    let data: { code?: number; data?: { accessToken?: string; refreshToken?: string } };
+    try {
+      data = (await resp.json()) as typeof data;
+    } catch {
+      return null;
+    }
+    const access = data.data?.accessToken?.trim();
+    if (data.code !== 0 || !access) return null;
+
+    return {
+      ...acc,
+      creds: {
+        ...acc.creds,
+        access_token: access,
+        refresh_token: data.data?.refreshToken?.trim() || rt,
+      },
+    };
+  }
+
+  // Fetch the account's credit snapshot from Tencent's billing meter. The
+  // response ships a bundle of packages: a monthly-refilling plan (cycle
+  // capacity) plus lifetime bonus packs (plain capacity). Total = sum of
+  // all active packages; per-package detail feeds the UI breakdown.
+  async usage(acc: Account): Promise<CreditUsage> {
+    const token = bearerFor(acc);
+    if (!token) throw new Error("no token");
+
+    const doFetch = this.fetchImpl ?? globalThis.fetch;
+    const resp = await doFetch("https://www.codebuddy.ai/v2/billing/meter/get-user-resource", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        "X-Domain": "www.codebuddy.ai",
+        "User-Agent": USER_AGENT,
+        "X-Product": "SaaS",
+        "X-IDE-Type": "CLI",
+      },
+      body: "{}",
+    });
+
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error(`credential invalid or expired (${resp.status})`);
+    }
+    if (resp.status !== 200) throw new Error(`credits HTTP ${resp.status}`);
+
+    const out = (await resp.json()) as BillingResponse;
+    if (out.code !== 0) throw new Error(`credits error (code=${out.code} msg=${out.msg})`);
+
+    let limit = 0;
+    let used = 0;
+    let remaining = 0;
+    let plan = "";
+    let resetAtUnix = 0; // soonest cycle end across active packages
+    const packages: UsagePackage[] = [];
+
+    for (const a of out.data?.Response?.Data?.Accounts ?? []) {
+      if (a.Status !== 0) continue;
+      if (!plan) plan = a.PackageName || a.SubProductName;
+
+      const pkgReset = parseCycleEnd(a.CycleEndTime);
+      if (pkgReset > 0 && (resetAtUnix === 0 || pkgReset < resetAtUnix)) resetAtUnix = pkgReset;
+
+      // A package is "monthly" when it carries a CycleCapacity budget that
+      // refills at CycleEndTime; otherwise it's a lifetime pack that just
+      // decreases per request.
+      const cSize = num(a.CycleCapacitySizePrecise, a.CycleCapacitySize);
+      const monthly = cSize > 0;
+      const pLimit = monthly ? cSize : num(a.CapacitySizePrecise, a.CapacitySize);
+      const pUsed = monthly
+        ? num(a.CycleCapacityUsedPrecise, a.CycleCapacityUsed)
+        : num(a.CapacityUsedPrecise, a.CapacityUsed);
+      const pRemain = monthly
+        ? num(a.CycleCapacityRemainPrecise, a.CycleCapacityRemain)
+        : num(a.CapacityRemainPrecise, a.CapacityRemain);
+
+      limit += pLimit;
+      used += pUsed;
+      remaining += pRemain;
+
+      packages.push({
+        name: a.PackageName || a.SubProductName,
+        subProduct: a.SubProductCode,
+        kind: monthly ? "monthly" : "lifetime",
+        limit: pLimit,
+        used: pUsed,
+        remaining: pRemain,
+        resetAtUnix: pkgReset || undefined,
+      });
+    }
+
+    return { limit, used, remaining, plan, resetAtUnix: resetAtUnix || undefined, packages };
+  }
+}
+
+interface BillingAccount {
+  PackageName: string;
+  SubProductName: string;
+  SubProductCode: string;
+  Status: number;
+  CapacitySize: number;
+  CapacityUsed: number;
+  CapacityRemain: number;
+  CycleCapacitySize: number;
+  CycleCapacityUsed?: number;
+  CycleCapacityRemain?: number;
+  CapacitySizePrecise: string;
+  CapacityUsedPrecise: string;
+  CapacityRemainPrecise: string;
+  CycleCapacitySizePrecise: string;
+  CycleCapacityUsedPrecise?: string;
+  CycleCapacityRemainPrecise?: string;
+  CycleEndTime: string;
+}
+
+interface BillingResponse {
+  code: number;
+  msg: string;
+  data?: {
+    Response?: {
+      Data?: {
+        Accounts?: BillingAccount[];
+      };
+    };
+  };
+}
+
+// Tencent sends precise values as strings to dodge float drift; the plain
+// numeric fields are the fallback.
+function num(precise: string | undefined, fallback: number | undefined): number {
+  if (precise) {
+    const v = Number(precise);
+    if (Number.isFinite(v)) return v;
+  }
+  return fallback ?? 0;
+}
+
+// CycleEndTime arrives as "2026-09-30 23:59:59" in Asia/Shanghai local time.
+function parseCycleEnd(s: string | undefined): number {
+  if (!s) return 0;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s.trim());
+  if (!m) return 0;
+  const [, y, mo, d, h, mi, sec] = m;
+  const utc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(sec ?? 0));
+  return Math.floor((utc - 8 * 3600 * 1000) / 1000); // Asia/Shanghai is UTC+8, no DST
+}
+
+// Refresh this long before the JWT actually expires — the upstream clock and
+// ours can disagree, and a request already in flight still needs the token.
+const REFRESH_WINDOW_MS = 5 * 60 * 1000;
+
+function jwtExpiringSoon(token: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3) return false; // opaque token: can't tell, let it ride
+  try {
+    const payload = JSON.parse(
+      Buffer.from(parts[1]!.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString()
+    ) as { exp?: number };
+    if (typeof payload.exp !== "number") return false;
+    return payload.exp * 1000 - Date.now() < REFRESH_WINDOW_MS;
+  } catch {
+    return false;
   }
 }

@@ -51,6 +51,9 @@ export interface Usage {
   outputTokens: number;
   cacheRead?: number;
   cacheWrite?: number;
+  // Upstream-reported credit cost for the request (CodeBuddy sends this in
+  // the stream's final usage event). Zero when the provider doesn't meter.
+  credit?: number;
 }
 
 // Normalized stream event — providers decode their wire format into these.
@@ -74,6 +77,31 @@ export interface ModelInfo {
   ownedBy?: string;
 }
 
+// One billing package inside an account — CodeBuddy ships a bundle: a
+// monthly-refilling plan plus lifetime bonus packs that just decrease.
+export interface UsagePackage {
+  name: string;
+  subProduct?: string;
+  kind?: "monthly" | "lifetime";
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAtUnix?: number;
+}
+
+// An account's credit/quota snapshot from the upstream billing API.
+// limit==0 means "no quota data". (Distinct from `Usage`, the per-request
+// token counts carried on stream events.)
+export interface CreditUsage {
+  limit: number;
+  used: number;
+  remaining: number;
+  plan?: string;
+  message?: string;
+  resetAtUnix?: number;
+  packages?: UsagePackage[];
+}
+
 export interface Provider {
   name(): string;
   caps(): Caps;
@@ -82,4 +110,11 @@ export interface Provider {
   classify(status: number, body: string): Outcome;
   // Optional: static catalogue for GET /v1/models.
   models?(): ModelInfo[];
+  // Optional: renew expiring credentials before the request is built.
+  // Returns the account to use (possibly unchanged), or null when the
+  // credential is unrecoverable — the proxy then treats it as dead.
+  refresh?(acc: Account): Promise<Account | null>;
+  // Optional: fetch the account's live credit/quota snapshot from the
+  // upstream billing API. Errors are surfaced to the caller as-is.
+  usage?(acc: Account): Promise<CreditUsage>;
 }

@@ -189,18 +189,15 @@ test("an empty 200 body surfaces as an upstream error, not a rotation", async ()
 });
 
 // The peek only sees the status when a body streams, so a failing status with a
-// streamable body has to be re-read before classifying.
+// streamable body has to be re-read before classifying. A 403 is transient:
+// the caller sees it and no account is touched.
 test("a failing status with a non-JSON body is still classified from the body", async () => {
   const { pool, writes } = makePool([row(1), row(2)]);
-  let call = 0;
-  const res = await proxyChat(provider, pool, req, {
-    fetch: async () => {
-      call++;
-      return call === 1
-        ? new Response("Forbidden", { status: 403 })
-        : new Response(OK_SSE, { status: 200 });
-    },
-  });
-  expect(res.account.id).toBe(2);
-  expect(writes).toEqual([{ id: 1, status: "banned" }]);
+  const err = await proxyChat(provider, pool, req, {
+    fetch: async () => new Response("Forbidden", { status: 403 }),
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(UpstreamError);
+  expect(err.status).toBe(403);
+  expect(err.outcome).toBe("transient");
+  expect(writes).toEqual([]);
 });

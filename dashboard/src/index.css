@@ -1,0 +1,193 @@
+@import "tailwindcss";
+
+/*
+ * ── gacor-router theme tokens ──────────────────────────────────────────
+ * Dark is the default (on :root); light applies via the `.light` class on
+ * <html> (see the no-flash script in index.html and useTheme). Brand hue
+ * is sky blue — the router's neon against the neutral dark surfaces.
+ */
+
+:root {
+  --background: #14161a;
+  --foreground: #d4d8de;
+  --card: #1b1f26;
+  --card-foreground: #d4d8de;
+  --popover: #1b1f26;
+  --popover-foreground: #d4d8de;
+
+  --primary: #38bdf8;
+  --primary-foreground: #0a1420;
+  --accent: #38bdf8;
+  --accent-foreground: #0a1420;
+
+  --secondary: #262c36;
+  --secondary-foreground: #9aa4b0;
+  --muted: #303744;
+  --muted-foreground: #8892a0;
+
+  --success: #34d399;
+  --success-foreground: #06110c;
+  --warning: #fbbf24;
+  --warning-foreground: #1a1200;
+  --error: #fb7185;
+  --error-foreground: #1a0606;
+  --info: #38bdf8;
+  --info-foreground: #04141d;
+  --destructive: #fb7185;
+  --destructive-foreground: #ffffff;
+
+  --border: #303744;
+  --input: #303744;
+  --ring: #38bdf8;
+
+  --sidebar-bg: #101318;
+  --sidebar-border: #262c36;
+
+  --chart-1: #38bdf8;
+  --chart-2: #818cf8;
+  --chart-3: #34d399;
+  --chart-4: #fbbf24;
+  --chart-5: #fb7185;
+  --chart-6: #2dd4bf;
+
+  --glow: 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent),
+    0 0 24px -2px color-mix(in srgb, var(--primary) 55%, transparent);
+  --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.3), 0 4px 8px rgba(0, 0, 0, 0.2);
+
+  --radius: 0.625rem;
+}
+
+.light {
+  --background: #f2f6fb;
+  --foreground: #101722;
+  --card: #ffffff;
+  --card-foreground: #101722;
+  --popover: #ffffff;
+  --popover-foreground: #101722;
+
+  --primary: #0284c7;
+  --primary-foreground: #ffffff;
+  --accent: #0284c7;
+  --accent-foreground: #ffffff;
+
+  --secondary: #e4ecf4;
+  --secondary-foreground: #455364;
+  --muted: #ebf1f7;
+  --muted-foreground: #5d6b7e;
+
+  --success: #059669;
+  --success-foreground: #ffffff;
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
+  --error: #e11d48;
+  --error-foreground: #ffffff;
+  --info: #0284c7;
+  --info-foreground: #ffffff;
+  --destructive: #e11d48;
+  --destructive-foreground: #ffffff;
+
+  --border: #d7e2ec;
+  --input: #d7e2ec;
+  --ring: #0284c7;
+
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #e0e8f0;
+
+  --chart-1: #0284c7;
+  --chart-2: #6366f1;
+  --chart-3: #059669;
+  --chart-4: #b45309;
+  --chart-5: #e11d48;
+  --chart-6: #0d9488;
+
+  --glow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent),
+    0 0 14px -4px color-mix(in srgb, var(--primary) 35%, transparent);
+  --shadow-card: 0 1px 2px rgba(16, 23, 34, 0.06), 0 1px 3px rgba(16, 23, 34, 0.08);
+}
+
+/* Map the runtime variables into Tailwind's theme so utilities like
+   bg-card, text-muted-foreground, border-border, bg-success follow the
+   active scheme. `inline` keeps the var() reference live. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-error: var(--error);
+  --color-error-foreground: var(--error-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar-bg: var(--sidebar-bg);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  color-scheme: dark;
+}
+html.light {
+  color-scheme: light;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.glow {
+  box-shadow: var(--glow);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+
+pre,
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}

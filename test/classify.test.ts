@@ -24,9 +24,9 @@ test("11140 request-illegal is dead even wrapped in a 200 envelope", () => {
   expect(p.classify(200, `{"code":11140,"msg":"request illegal","requestId":"x"}`)).toBe("dead");
 });
 
-test("401/403 are dead", () => {
-  expect(p.classify(401, "")).toBe("dead");
-  expect(p.classify(403, "")).toBe("dead");
+test("401/403 are transient — pre-flight refresh keeps creds current, so a rejection is upstream noise", () => {
+  expect(p.classify(401, "")).toBe("transient");
+  expect(p.classify(403, "")).toBe("transient");
 });
 
 test("5xx is transient", () => {

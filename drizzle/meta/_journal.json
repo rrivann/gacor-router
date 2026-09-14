@@ -8,6 +8,34 @@
       "when": 1789287781069,
       "tag": "0000_damp_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789362242809,
+      "tag": "0001_eager_madelyne_pryor",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789370615848,
+      "tag": "0002_vengeful_dagger",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789374014686,
+      "tag": "0003_oval_plazm",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789376039333,
+      "tag": "0004_thick_zeigeist",
+      "breakpoints": true
     }
   ]
 }

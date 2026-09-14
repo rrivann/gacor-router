@@ -20,7 +20,8 @@ export class Pool {
   constructor(
     private list: (provider: string) => AccountRow[],
     private rotation: (provider: string) => RotationMode = () => "sticky",
-    private setStatus: (id: number, status: string) => void = () => {}
+    private setStatus: (id: number, status: string) => void = () => {},
+    private updateCreds: (id: number, creds: Record<string, string>) => void = () => {}
   ) {}
 
   // Reflect a request's outcome back onto the account. "transient" is
@@ -29,6 +30,12 @@ export class Pool {
   react(id: number, outcome: Outcome): void {
     if (outcome === "dead") this.setStatus(id, "banned");
     else if (outcome === "exhausted") this.setStatus(id, "exhausted");
+  }
+
+  // Write refreshed credentials back to storage. No-op unless the pool was
+  // constructed with an updateCreds sink.
+  persistCreds(id: number, creds: Record<string, string>): void {
+    this.updateCreds(id, creds);
   }
 
   pick(provider: string, tried = new Set<number>()): Account | null {

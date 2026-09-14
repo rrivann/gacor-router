@@ -51,6 +51,18 @@ export interface ProxyOptions {
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
   maxAttempts?: number;
+  // Observability tap — invoked exactly once per proxied request with the
+  // final stream (or null when the request never produced one) plus the
+  // attempt log. The tap owns draining the generator; used for request
+  // logging and live events.
+  tap?: (result: TapResult) => AsyncGenerator<StreamEvent>;
+}
+
+export interface TapResult {
+  stream: AsyncGenerator<StreamEvent> | null;
+  account: Account | null;
+  attempts: Attempt[];
+  error: UpstreamError | NoAccountError | null;
 }
 
 export async function proxyChat(
@@ -65,10 +77,40 @@ export async function proxyChat(
   const attempts: Attempt[] = [];
   const maxAttempts = opts.maxAttempts ?? 5;
 
+  // Route the terminal outcome through the tap without duplicating it at
+  // every exit. The tap's returned generator is what the caller sees.
+  function finish(
+    stream: AsyncGenerator<StreamEvent> | null,
+    account: Account | null,
+    error: UpstreamError | NoAccountError | null
+  ): ProxyResult {
+    if (opts.tap) {
+      const tapped = opts.tap({ stream, account, attempts, error });
+      if (error) throw error;
+      return { stream: tapped, account: account!, attempts };
+    }
+    if (error) throw error;
+    return { stream: stream!, account: account!, attempts };
+  }
+
   while (attempts.length < maxAttempts) {
-    const account = pool.pick(name, tried);
+    let account = pool.pick(name, tried);
     if (!account) break;
     tried.add(account.id);
+
+    // Renew expiring credentials before they're used; an unrecoverable one is
+    // treated as dead so rotation moves on without burning a fetch.
+    if (provider.refresh) {
+      const before = account.creds;
+      const refreshed = await provider.refresh(account);
+      if (!refreshed) {
+        attempts.push({ account, status: 0, outcome: "dead", body: "credential refresh failed" });
+        pool.react(account.id, "dead");
+        continue;
+      }
+      if (refreshed.creds !== before) pool.persistCreds(account.id, refreshed.creds);
+      account = refreshed;
+    }
 
     const upstream = await provider.buildRequest(req, account);
     const resp = await doFetch(upstream, opts.signal ? { signal: opts.signal } : undefined);
@@ -80,7 +122,7 @@ export async function proxyChat(
     if (peeked.response) {
       const outcome = provider.classify(resp.status, "");
       if (outcome === "ok") {
-        return { stream: provider.parseStream(peeked.response, req), account, attempts };
+        return finish(provider.parseStream(peeked.response, req), account, null);
       }
       // A streamable body on a failing status: read it so the reason is visible.
       const body = await peeked.response.text();
@@ -88,7 +130,7 @@ export async function proxyChat(
       attempts.push({ account, status: resp.status, outcome: reclassified, body });
       pool.react(account.id, reclassified);
       if (reclassified === "dead" || reclassified === "exhausted") continue;
-      throw new UpstreamError(resp.status, body, reclassified, attempts);
+      return finish(null, null, new UpstreamError(resp.status, body, reclassified, attempts));
     }
 
     const body = peeked.errorBody ?? "";
@@ -99,8 +141,8 @@ export async function proxyChat(
     // classify() says the account is fine, yet the body wasn't a usable
     // stream — a malformed response, not a rotation-worthy failure.
     if (outcome === "dead" || outcome === "exhausted") continue;
-    throw new UpstreamError(resp.status, body, outcome, attempts);
+    return finish(null, null, new UpstreamError(resp.status, body, outcome, attempts));
   }
 
-  throw new NoAccountError(name, attempts);
+  return finish(null, null, new NoAccountError(name, attempts));
 }
