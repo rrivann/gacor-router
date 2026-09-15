@@ -7,7 +7,7 @@
 import { Hono } from "hono";
 import { registry } from "../providers";
 import { pool } from "../pool";
-import { proxyChat, NoAccountError, UpstreamError } from "../proxy";
+import { proxyChat, proxyImage, NoAccountError, UpstreamError } from "../proxy";
 import { toCanonical, toSSE, toCompletion, type OpenAIBody } from "../convert/openai";
 import {
   toAnthropicMessage,
@@ -19,8 +19,9 @@ import { resolveModel } from "../lib/model";
 import { errorResponse } from "../lib/http";
 import { loggingTap } from "../lib/logging";
 import { compressMessages, formatRtkLog } from "../rtk";
+import { applyFilters } from "../lib/filters";
 import { getSetting } from "../db/accounts";
-import type { ChatRequest, Provider } from "../providers/types";
+import type { ChatRequest, ImageRequest, Provider } from "../providers/types";
 
 export const api = new Hono();
 
@@ -110,6 +111,11 @@ function tokenSaverEnabled(c: { req: { header: (n: string) => string | undefined
 // the resulting stream is rendered, which is the only thing the two wire
 // formats disagree on by this point.
 function run(r: Resolved, req: ChatRequest, signal: AbortSignal, saver: boolean) {
+  // Filters run first so RTK (and the provider builder) see the rewritten text.
+  // Mutates req.messages in place, same contract as compressMessages.
+  const filterStats = applyFilters(req.messages, r.providerName);
+  if (filterStats.rewrites > 0) console.log(`filters: rewrote ${filterStats.rewrites} message part(s)`);
+
   const stats = compressMessages(req.messages, saver);
   const line = formatRtkLog(stats);
   if (line) console.log(line);
@@ -148,6 +154,59 @@ api.post("/v1/messages", async (c) => {
   }
 });
 
+// Image generation, 0penAI-compatible. The body is validated inline (only
+// `model` and `prompt` are required); the provider does the real work.
+api.post("/v1/images/generations", async (c) => {
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  if (typeof raw !== "object" || raw === null) {
+    return errorResponse(400, "invalid_request_error", "body must be a JSON object");
+  }
+  const body = raw as Record<string, unknown>;
+  if (typeof body.model !== "string" || body.model.length === 0) {
+    return errorResponse(400, "invalid_request_error", "`model` must be a non-empty string", "model");
+  }
+  if (typeof body.prompt !== "string" || body.prompt.length === 0) {
+    return errorResponse(400, "invalid_request_error", "`prompt` must be a non-empty string", "prompt");
+  }
+  const route = resolveModel(body.model);
+  if (!route) {
+    return errorResponse(400, "invalid_request_error", `cannot route model "${body.model}"`, "model");
+  }
+  const provider = registry.get(route.provider);
+  if (!provider) {
+    return errorResponse(501, "not_implemented_error", `provider "${route.provider}" is not implemented`);
+  }
+  if (!provider.image) {
+    return errorResponse(
+      501,
+      "not_implemented_error",
+      `provider "${route.provider}" does not support image generation`
+    );
+  }
+
+  const req: ImageRequest = {
+    model: route.model,
+    prompt: body.prompt,
+    n: typeof body.n === "number" ? body.n : undefined,
+    size: typeof body.size === "string" ? body.size : undefined,
+    quality: typeof body.quality === "string" ? body.quality : undefined,
+    responseFormat: body.response_format === "b64_json" ? "b64_json" : body.response_format === "url" ? "url" : undefined,
+    raw: body,
+  };
+
+  try {
+    const { image } = await proxyImage(provider, pool, req, { signal: c.req.raw.signal });
+    return c.json(image);
+  } catch (e) {
+    return upstreamFailure(e);
+  }
+});
+
 // Model ids are namespaced `provider/model`, matching what clients must send.
 // Token limits + feature flags ride along so the dashboard can render the
 // full catalogue table without a second source.
@@ -168,6 +227,7 @@ api.get("/v1/models", (c) => {
       effort: m.effort ?? null,
       images: m.images === true,
       tool_calls: m.toolCalls === true,
+      kind: m.kind ?? "chat",
     }));
   });
   return c.json({ object: "list", data });

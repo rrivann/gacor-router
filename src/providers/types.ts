@@ -14,6 +14,30 @@ export type Outcome = "ok" | "transient" | "exhausted" | "dead";
 export interface Caps {
   chat: boolean;
   images: boolean;
+  imageGen?: boolean;
+}
+
+// Image generation request/response. Shape mirrors 0penAI's
+// /v1/images/generations so translation stays trivial for compatible clients.
+export interface ImageRequest {
+  model: string;
+  prompt: string;
+  n?: number;
+  size?: string;
+  quality?: string;
+  responseFormat?: "url" | "b64_json";
+  raw?: unknown;
+}
+
+export interface ImageOut {
+  url?: string;
+  b64_json?: string;
+  revised_prompt?: string;
+}
+
+export interface ImageResponse {
+  created: number;
+  data: ImageOut[];
 }
 
 // Canonical internal request — everything is normalized into this shape
@@ -51,6 +75,9 @@ export interface Usage {
   outputTokens: number;
   cacheRead?: number;
   cacheWrite?: number;
+  // Reasoning-model split of output: subset of outputTokens spent on the
+  // hidden thinking pass. Priced separately by some upstreams.
+  reasoning?: number;
   // Upstream-reported credit cost for the request (CodeBuddy sends this in
   // the stream's final usage event). Zero when the provider doesn't meter.
   credit?: number;
@@ -91,6 +118,9 @@ export interface ModelInfo {
   effort?: string;
   images?: boolean;
   toolCalls?: boolean;
+  // What endpoint serves this model. "chat" (default) → /v1/chat/completions
+  // and /v1/messages. "image" → /v1/images/generations.
+  kind?: "chat" | "image";
 }
 
 // One billing package inside an account — CodeBuddy ships a bundle: a
@@ -133,4 +163,7 @@ export interface Provider {
   // Optional: fetch the account's live credit/quota snapshot from the
   // upstream billing API. Errors are surfaced to the caller as-is.
   usage?(acc: Account): Promise<CreditUsage>;
+  // Optional: generate an image. Non-stream by design — image endpoints ship
+  // one JSON response with a URL or base64 payload.
+  image?(req: ImageRequest, acc: Account): Promise<{ resp: Response; parse: () => Promise<ImageResponse> }>;
 }

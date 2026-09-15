@@ -4,7 +4,15 @@
 // account; a transient one (5xx, per-model rate limit) is returned to the
 // caller, since rotating wouldn't help and the account is still good.
 
-import type { Account, ChatRequest, Outcome, Provider, StreamEvent } from "../providers/types";
+import type {
+  Account,
+  ChatRequest,
+  ImageRequest,
+  ImageResponse,
+  Outcome,
+  Provider,
+  StreamEvent,
+} from "../providers/types";
 import { peekError } from "../providers/peek";
 import type { Pool } from "../pool/pool";
 
@@ -145,4 +153,70 @@ export async function proxyChat(
   }
 
   return finish(null, null, new NoAccountError(name, attempts));
+}
+
+export interface ImageProxyResult {
+  image: ImageResponse;
+  account: Account;
+  attempts: Attempt[];
+}
+
+// Image variant of the request loop. Same rotation rules, non-stream: the
+// upstream ships one JSON envelope so classify() can read the body directly.
+export async function proxyImage(
+  provider: Provider,
+  pool: Pool,
+  req: ImageRequest,
+  opts: { signal?: AbortSignal; maxAttempts?: number } = {}
+): Promise<ImageProxyResult> {
+  if (!provider.image) {
+    throw new UpstreamError(501, `provider "${provider.name()}" does not support image generation`, "dead", []);
+  }
+  const name = provider.name();
+  const tried = new Set<number>();
+  const attempts: Attempt[] = [];
+  const maxAttempts = opts.maxAttempts ?? 5;
+
+  while (attempts.length < maxAttempts) {
+    let account = pool.pick(name, tried);
+    if (!account) break;
+    tried.add(account.id);
+
+    if (provider.refresh) {
+      const before = account.creds;
+      const refreshed = await provider.refresh(account);
+      if (!refreshed) {
+        attempts.push({ account, status: 0, outcome: "dead", body: "credential refresh failed" });
+        pool.react(account.id, "dead");
+        continue;
+      }
+      if (refreshed.creds !== before) pool.persistCreds(account.id, refreshed.creds);
+      account = refreshed;
+    }
+
+    const { resp, parse } = await provider.image(req, account);
+    // Image endpoint returns one JSON body — no stream sniff needed.
+    if (resp.ok) {
+      try {
+        const image = await parse();
+        return { image, account, attempts };
+      } catch (err) {
+        // parse() only throws on structural failures (non-zero code, malformed
+        // JSON). Treat as transient: retry might land on a different upstream
+        // instance, but banning would over-react.
+        const msg = err instanceof Error ? err.message : String(err);
+        attempts.push({ account, status: resp.status, outcome: "transient", body: msg });
+        throw new UpstreamError(resp.status, msg, "transient", attempts);
+      }
+    }
+
+    const body = await resp.text();
+    const outcome = provider.classify(resp.status, body);
+    attempts.push({ account, status: resp.status, outcome, body });
+    pool.react(account.id, outcome);
+    if (outcome === "dead" || outcome === "exhausted") continue;
+    throw new UpstreamError(resp.status, body, outcome, attempts);
+  }
+
+  throw new NoAccountError(name, attempts);
 }
