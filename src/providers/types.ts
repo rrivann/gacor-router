@@ -72,9 +72,25 @@ export type FinishReason = "stop" | "tool_calls" | "length" | "content_filter";
 // catalogue, so providers ship a static list.
 export interface ModelInfo {
   id: string;
+  // Display name from the upstream's official table (e.g. "Fast", "GPT-6-Astra").
+  name?: string;
   maxInputTokens?: number;
   maxOutputTokens?: number;
   ownedBy?: string;
+  // Reasoning-capable — the model emits a thinking stream (reasoning_content)
+  // alongside the answer. Surfaces as the "Thinking" feature badge in the UI.
+  thinking?: boolean;
+
+  // ── Official CodeBuddy catalogue metadata ──────────────────────
+  // Cost relative to the default model's 1x base rate; 0 means free (🆓).
+  creditMultiplier?: number;
+  // Whether the thinking stream can be disabled client-side ("canDisable"),
+  // or it always runs ("onlyReasoning").
+  thinkingToggle?: "canDisable" | "onlyReasoning" | null;
+  // Supported effort levels as freeform text ("low→max", "high", ...).
+  effort?: string;
+  images?: boolean;
+  toolCalls?: boolean;
 }
 
 // One billing package inside an account — CodeBuddy ships a bundle: a

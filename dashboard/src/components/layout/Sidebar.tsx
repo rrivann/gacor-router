@@ -13,6 +13,7 @@ import {
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
 import { useWsStatus } from "../../hooks/useWebSocket";
+import { DebugStats } from "./DebugStats";
 
 interface NavItem {
   label: string;
@@ -103,7 +104,8 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-sidebar-border p-2">
+      <div className="space-y-1 border-t border-sidebar-border p-2">
+        <DebugStats />
         <button
           onClick={toggleTheme}
           className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-secondary-foreground hover:bg-secondary hover:text-foreground"

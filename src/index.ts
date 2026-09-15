@@ -8,6 +8,7 @@ import { env } from "./lib/env";
 import { api } from "./api";
 import { manage } from "./api/manage";
 import { onEvent } from "./lib/events";
+import { startAutoWarmScheduler } from "./lib/autowarm";
 
 const app = new Hono();
 
@@ -86,3 +87,7 @@ const server = Bun.serve({
 });
 
 console.log(`gacor-router listening on http://${env.host}:${server.port}`);
+
+// Background auto-warmup: warms accounts whose provider enables it (config in
+// settings, re-read every minute). Unref'd — never blocks shutdown.
+startAutoWarmScheduler();

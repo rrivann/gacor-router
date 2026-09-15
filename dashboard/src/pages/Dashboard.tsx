@@ -1,26 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Users, Activity, CheckCircle, Zap, CircleAlert, Ban } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import {
-  fetchDashboardStats,
-  fetchModelUsage,
-  type DashboardStats,
-  type ModelUsageRow,
-} from "../lib/api";
-import { cn, formatTokens, modelColor } from "../lib/utils";
+import { TokenUsage } from "../components/dashboard/TokenUsage";
+import { fetchDashboardStats, type DashboardStats } from "../lib/api";
+import { cn, formatTokens } from "../lib/utils";
 import { useWsEvent } from "../hooks/useWebSocket";
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [models, setModels] = useState<ModelUsageRow[]>([]);
 
   const load = useCallback(async () => {
-    const [s, m] = await Promise.all([
-      fetchDashboardStats().catch(() => null),
-      fetchModelUsage().then((r) => r.data).catch(() => [] as ModelUsageRow[]),
-    ]);
-    setStats(s);
-    setModels(m);
+    setStats(await fetchDashboardStats().catch(() => null));
   }, []);
 
   useEffect(() => {
@@ -73,9 +63,6 @@ export default function Dashboard() {
     },
   ];
 
-  const topModels = models.filter((m) => m.totalTokens > 0 || m.requests > 0).slice(0, 8);
-  const maxTokens = Math.max(1, ...topModels.map((m) => m.totalTokens));
-
   return (
     <div className="space-y-6">
       <div>
@@ -103,69 +90,31 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Pool health */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Pool Health</CardTitle>
-            <CardDescription>Account states across providers</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {[
-              { label: "Active", value: stats?.pool.active ?? 0, icon: CheckCircle, tone: "text-success" },
-              { label: "Exhausted", value: stats?.pool.exhausted ?? 0, icon: CircleAlert, tone: "text-warning" },
-              { label: "Banned", value: stats?.pool.banned ?? 0, icon: Ban, tone: "text-error" },
-            ].map((row) => (
-              <div key={row.label} className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 text-secondary-foreground">
-                  <row.icon className={cn("h-4 w-4", row.tone)} />
-                  {row.label}
-                </span>
-                <span className="font-semibold tabular-nums">{row.value}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+      {/* Token usage card (etteum): totals + over-time chart + by model */}
+      <TokenUsage />
 
-        {/* Token usage by model */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Token Usage by Model</CardTitle>
-            <CardDescription>Top consumers, all time</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {topModels.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                No requests yet — send one via /v1/chat/completions
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {topModels.map((m, i) => (
-                  <div key={`${m.provider}/${m.model}`} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="truncate font-medium">
-                        {m.provider}/{m.model}
-                      </span>
-                      <span className="text-muted-foreground tabular-nums">
-                        {formatTokens(m.totalTokens)} · {m.requests} req
-                      </span>
-                    </div>
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${(m.totalTokens / maxTokens) * 100}%`,
-                          background: modelColor(`${m.provider}/${m.model}`, i),
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      {/* Pool health */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Pool Health</CardTitle>
+          <CardDescription>Account states across providers</CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-3 gap-3">
+          {[
+            { label: "Active", value: stats?.pool.active ?? 0, icon: CheckCircle, tone: "text-success" },
+            { label: "Exhausted", value: stats?.pool.exhausted ?? 0, icon: CircleAlert, tone: "text-warning" },
+            { label: "Banned", value: stats?.pool.banned ?? 0, icon: Ban, tone: "text-error" },
+          ].map((row) => (
+            <div key={row.label} className="flex items-center justify-between rounded-lg border border-border bg-background p-3 text-sm">
+              <span className="flex items-center gap-2 text-secondary-foreground">
+                <row.icon className={cn("h-4 w-4", row.tone)} />
+                {row.label}
+              </span>
+              <span className="font-semibold tabular-nums">{row.value}</span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
     </div>
   );
 }

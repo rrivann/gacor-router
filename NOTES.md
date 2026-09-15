@@ -1,161 +1,130 @@
 # gacor-router — Catatan Lanjutan Proyek
 
 > Dokumen ini untuk lanjut session baru. Baca ini dulu sebelum ngapa-ngapain.
-> Terakhir update: 2026-09-13
+> Terakhir update: 2026-09-14 (sesi dashboard UI + warmup + katalog verified)
 
 ## Apa ini
 
 AI gateway personal — proxy OpenAI/Anthropic-compatible dengan account pool,
 format translation, dan token saver. **Single-user, local-first, dipakai sendiri.**
 
-- **Nama**: gacor-router
+- **Nama**: Gacor-Router
 - **Arah**: B — Bun + TypeScript + Hono + Drizzle + SQLite (bukan Go)
-- **Referensi desain**: 9Router (punya sendiri), enowX, etteum-pool
-  (ketiganya sudah dipelajari mendalam; pola terbaik di-adopsi, detail di bawah)
+- **Dashboard**: React 19 + Vite + Tailwind v4 di `dashboard/`, diserve backend
+  di port yang sama (7788). Tema: sky blue, brand "Gacor-Router", favicon petir.
 
-## Status saat ini
+## Status saat ini — SEMUA JALAN
 
-Commit: `a3d72ce` — scaffold selesai & verified. Backend + dashboard UI jalan.
+- [x] Backend: Hono + Bun, port 7788, `/health`, `tsc --noEmit` clean
+- [x] **150 test pass, 0 fail** (10 test files)
+- [x] Provider: **CodeBuddy** lengkap (gzip body, CLI headers, JWT refresh,
+  classify markers, peekError JSON-envelope sniff)
+- [x] Pool: sticky/round-robin, skip tried, react → banned/exhausted
+- [x] Proxy: build→fetch→sniff→classify→react→rotate, max 5 attempts
+- [x] Routes: `/v1/chat/completions` (stream+non-stream), `/v1/models`, `/v1/messages` (501 stub)
+- [x] Request logging: `request_logs` table, proxy tap, `credit_used` dari usage event
+- [x] Management API `/api/*` + `/ws` live events (account_status, request_log)
+- [x] Tunnel: `/api/tunnel/*` — Cloudflare quick tunnel, auto-download cloudflared
+- [x] Credit tracking: `usage()` via Tencent billing meter, cached, refresh endpoint
+- [x] Warmup: manual + auto-warmup scheduler + warm-on-add (enowx pattern)
+- [x] Debug: `/api/debug/process` (CPU self-sample, memory, event loop, build)
+- [x] Chat playground: `chat_sessions` + `/api/chat/sessions` CRUD
+- [x] Dashboard pages: Dashboard (TokenUsage card ala etteum), Accounts
+  (provider cards → drill-down ala etteum/enowx, warmup, settings modal),
+  Requests (live feed + drawer + credit), Models (full table ala etteum),
+  Chat (SSE streaming, markdown, reasoning block), Tunnel, Settings
 
-- [x] Folder + git init
-- [x] package.json + deps (hono, drizzle-orm, drizzle-kit, typescript, @types/bun, better-sqlite3)
-- [x] tsconfig strict + ESM
-- [x] Skema DB awal: tabel `accounts` + `settings` (migration 0000, sudah applied)
-- [x] Tabel `request_logs` (migration 0001) — request logging + live events
-- [x] Provider interface + registry (port dari enowX ke TS)
-- [x] Pool (sticky/round-robin, skip tried accounts)
-- [x] Entry Hono + `/health` — **verified jalan**: boot OK, `GET /health` → `{"ok":true,"name":"gacor-router"}`
-- [x] Route `/v1/chat/completions` (wired end-to-end, stream + non-stream), `/v1/models`, `/v1/messages` (501 stub)
-- [x] Provider pertama: **CodeBuddy** (gzip body, CLI headers, JWT refresh, classify markers)
-- [x] Converter OpenAI (canonical ⇄ wire), peekError JSON-envelope sniffing
-- [x] Management API `/api/*` (accounts CRUD, settings KV, stats) + `/ws` live events
-- [x] **Dashboard UI** (React 19 + Vite + Tailwind v4 di `dashboard/`) — diserve backend
-  di port yang sama; halaman: Dashboard, Accounts, Requests (live feed + drawer), Models, Settings
-- [x] `tsc --noEmit` PASS + 120 tests PASS
+## Katalog CodeBuddy — 29 model, VERIFIED LIVE
 
-Belum ada:
-- [ ] Converter Anthropic (`/v1/messages` penuh)
-- [ ] Provider tambahan selain CodeBuddy
-- [ ] RTK token saver (port dari 9Router)
+Sumber: tabel resmi workbuddy.ai + **probe live per model** (effort spectrum Y/N,
+multi-run). Jangan ubah tanpa konfirmasi LO.
+
+- **Spektrum effort verified** (label ada di `codebuddy.models.ts`):
+  - `low→max (5 level)` — 15 model (fast/balanced, claude semua, deepseek-flash,
+    hy3/hy4/hy4-f, gpt-6-astra, gpt-5.6-terra/luna, glm-5.3/5.2, kimi k3/k2.6/k2.5)
+  - `low→xhigh` — primary-model, gpt-5.5, gpt-5.4, gpt-5.3-codex
+    (max **konsisten** ditolak 11133, 2 runs)
+  - `low→max (flaky 11134)` — gpt-5.6-sol (unstable di semua level)
+- **Bukan thinking** (flag dihapus setelah probe): deepseek-v3-0324,
+  gemini-3.5-flash, gemini-3.1-pro — nggak emit reasoning sama sekali
+- **Metadata per model**: name, creditMultiplier (🆓 0x untuk hy3/hy4-f/deepseek-flash),
+  thinking, thinkingToggle, effort, images, toolCalls, owner
+- **Owner**: anthropic/openai/google/deepseek/zhipu/moonshot/minimax/tencent
+- Model promo gratis (0x): hy3 (sd 30 Sep), hy4-preview-f (sd 10 Okt),
+  deepseek-v4.1-flash (sd 25 Sep 2026)
+
+## Arsitektur
+
+```
+client → api/index.ts (validate + resolveModel "provider/model")
+       → convert/openai.toCanonical
+       → proxy/proxyChat (loop: pool.pick → refresh? → buildRequest → fetch
+                          → peekError → classify → react/rotate)
+       → provider.parseStream → toSSE/toCompletion → client
+       └→ logging tap → request_logs + WS event
+```
+
+- `src/lib/warmup.ts` — probe glm-5.2 "hi" → classify → status + credit refresh
+- `src/lib/autowarm.ts` — scheduler (tick 1m, unref'd), config di settings,
+  concurrency batching, last-warm persist
+- `src/tunnel/` — cloudflared binary manager + quick tunnel state machine
+- `dashboard/` — React SPA, lazy chunk untuk Chat (syntax highlighter 278KB)
 
 ## Cara jalanin
 
 ```bash
-# bun TIDAK di PATH shell non-login — pakai full path atau export dulu:
-export PATH="$HOME/.bun/bin:$PATH"
-
+export PATH="$HOME/.bun/bin:$PATH"   # bun WAJIB (nggak di PATH non-login)
 cd /Users/rivanalbaniray/Documents/github/gacor-router
-bun run dev          # watch mode, port 7788
-bun run start        # tanpa watch
+bun run dev          # watch mode, :7788
 bun run typecheck    # tsc --noEmit
-bun run db:generate  # drizzle-kit generate (setelah edit src/db/schema.ts)
-bun run db:migrate   # apply migrations (butuh better-sqlite3 — sudah terpasang)
-bun run db:studio    # GUI drizzle
+bun test             # 150 tests
+bun run db:generate  # setelah edit src/db/schema.ts
+bun run db:migrate
 
-# Dashboard (React+Vite di dashboard/):
-cd dashboard && bun install    # sekali aja
-bun run build                  # build ke dashboard/dist (diserve backend di :7788)
-bun run dev                    # dev server :5173 dengan proxy /api+/v1+/ws → :7788
+# Dashboard
+cd dashboard && bun install   # sekali
+bun run build                 # → dist (diserve :7788)
+bun run dev                   # :5173 proxy → :7788
 ```
 
-- Port default: **7788** (env `PORT`), host `127.0.0.1`
+- Port: **7788** (env `PORT`), host `127.0.0.1`
 - DB: `./gacor.db` (bun:sqlite, WAL) — env `DB_PATH`
-- Env helper: `src/lib/env.ts`
+- Migrations: 0000 (accounts+settings) s/d 0005 (request_logs.source)
 
 ## Gotchas (penting!)
 
-1. **Bun di PATH**: `bun` cuma ada di `~/.bun/bin/bun` (versi 1.3.11). Shell
-   non-login nggak punya di PATH → selalu `export PATH="$HOME/.bun/bin:$PATH"`
-   dulu, atau pakai full path.
-2. **better-sqlite3 build script** butuh `bun` di PATH saat install →
-   export PATH dulu baru `bun add`. (devDep, khusus untuk drizzle-kit CLI
-   yang nggak support `bun:sqlite`. Runtime app tetap pakai `bun:sqlite`.)
-3. **bun:sqlite vs drizzle-kit**: drizzle-kit migrate/generate butuh
-   better-sqlite3. Kalau error "Please install either 'better-sqlite3'..." →
-   pastikan devDep terpasang.
-4. **9router jalan di port 20127/20128** — jangan bentrok. gacor-router 7788 aman.
+1. **bun di PATH**: `export PATH="$HOME/.bun/bin:$PATH"` dulu selalu.
+2. **drizzle `mode: "timestamp"` simpan unix DETIK bukan ms** — query range
+   request_logs pakai detik (`created_at >= nowSec - N*3600`).
+3. **bun test TIDAK isolasi module cache per file** — semua test yang sentuh
+   `src/db` HARUS dalam SATU file (`test/api.test.ts`). Fetch stub di-share.
+4. **better-sqlite3** cuma buat drizzle-kit CLI; runtime pakai `bun:sqlite`.
+5. **9router jalan di 20127/20128** — jangan bentrok. gacor 7788 aman.
+6. CodeBuddy upstream: system prompt WAJIB (11128), nggak boleh kosong (11133),
+   body gzip, `default-model-lite` dkk retired (11102) — katalog sudah dipruning.
+7. **KATALOG: jangan hapus/ubah tanpa konfirmasi LO.** Data effort = hasil
+   probe live multi-run, bukan asumsi tabel.
 
-## Arsitektur (keputusan yang sudah diambil)
+## Konvensi kerja (kesepakatan sama LO)
 
-### Pattern dari enowX (yang di-adopsi)
-- **Provider interface minimal**: `name() / caps() / buildRequest() / parseStream() / classify(status, body) → Outcome`.
-  Outcome = `"ok" | "transient" | "exhausted" | "dead"` — drives pool reaction:
-  dead → banned, exhausted → nunggu reset, transient → retry/rotate.
-- **Pool `pick(provider, tried)`** — sticky by default, round-robin opsional
-  (setting `pool_rotation:<provider>`), skip account yang sudah dicoba di
-  request yang sama.
-- **peekJSONError pattern** (belum diimplement, catat buat nanti): upstream
-  kayak CodeBuddy kadang balikin HTTP 200 dengan body JSON error
-  `{"code":11101,...}` alih-alih SSE. Peek byte pertama: kalau `{` → buffer &
-  parse error; kalau `data:`/`event:` → biarin stream.
-- **Account credentials**: `secret` single-token ATAU `creds` JSON multi-field
-  (`{access_token, refresh_token, region, ...}`).
+- **Pelan-pelan**, satu langkah per konfirmasi
+- **Konfirmasi dulu sebelum implementasi apa pun** — termasuk hapus/ubah
+  katalog, model, data. Jangan pernah hapus sendiri.
+- Bahasa: Indonesian santai
+- Testing live: pakai akun real `cb-global-1` di DB (credit 500+/520)
 
-### Pattern dari 9Router (yang mau di-port)
-- **RTK Token Saver** — 8 strategi (dedup-log, ls, git-status, grep, headroom,
-  caveman, ponytail, pxpipe). Source: `9router/open-sse/rtk/`
-- **Executor CodeBuddy** — gzip body, headers X-Stainless-*, X-Request-ID dll.
-  Source: `9router/open-sse/executors/codebuddy.js`
-  dan `9router/open-sse/providers/registry/codebuddy.js`
-  (base URL `https://www.codebuddy.ai/v2/chat/completions`,
-  CN variant `https://copilot.tencent.com`, X-Domain header per variant)
-- **Translator registry** — source: `9router/open-sse/translator/`
+## Belum ada / next (tanyakan dulu sebelum gas)
 
-### Yang SENGJAJA nggak diadopsi (personal use, keep it simple)
-- Auto-signup ecosystem (SMS/captcha/mailer ala enowX) — over-engineered
-- Cloud sync, community layer, marketplace
-- MITM credential capture
-- Plugin runtime
-
-## Struktur folder saat ini
-
-```
-src/
-├── index.ts            # entry — Hono + Bun.serve + /health
-├── api/index.ts        # stub (nanti /v1/* routes)
-├── providers/
-│   ├── types.ts        # Provider, Account, Outcome, ChatRequest, StreamEvent
-│   └── registry.ts     # registry sync-safe
-├── pool/pool.ts        # Pool class
-├── convert/index.ts    # stub (nanti format translation)
-├── db/
-│   ├── schema.ts       # accounts + settings (drizzle)
-│   └── index.ts        # bun:sqlite client + WAL
-└── lib/env.ts          # PORT/HOST/DB_PATH
-drizzle/                # migrations (0000 applied)
-```
-
-## Next steps (urutan rencana, konfirmasi dulu sebelum gas)
-
-1. **Route `/v1/*` + wire pool** — `POST /v1/chat/completions` yang baca
-   account dari DB, lewat pool, return 501 (belum ada provider). Plus
-   `GET /v1/models` dummy.
-2. **Provider pertama: CodeBuddy** — port dari executor 9Router
-   (gzip, headers, classify via peekJSONError).
-3. **Converter** — OpenAI request → canonical ChatRequest; stream events →
-   OpenAI SSE response. (Anthropic belakangan.)
+- [ ] Converter Anthropic (`/v1/messages` penuh)
+- [ ] Provider tambahan selain CodeBuddy
+- [ ] RTK token saver (port dari 9Router)
 
 ## Referensi material (path lokal)
 
-- **9router** (kode sumber utama untuk port): `/Users/rivanalbaniray/Documents/github/9router/`
-  - Executor CodeBuddy: `open-sse/executors/codebuddy.js`
-  - Registry CodeBuddy: `open-sse/providers/registry/codebuddy.js`
-  - RTK: `open-sse/rtk/` (index, headroom, caveman, ponytail, pxpipe, systemInject)
-  - Translator: `open-sse/translator/` (formats/openai.js, formats/claude.js, request/, response/)
-  - Pool/fallback: `open-sse/services/accountFallback.js`
-  - Catatan riset lengkap: `/Users/rivanalbaniray/Documents/github/9router/.workbuddy-ai/memory/2026-09-13.md`
-- **enowx zip** (kalau mau baca ulang): `~/Downloads/enowx-main.zip`
-  atau `9router/enowx-main.zip`. Extract sementara ada di `/tmp/enowx-study/`
-  (TEMP — bisa kehapus pas reboot, extract ulang dari zip kalau perlu).
-  - Yang worth baca: `core/provider/provider.go` (interface),
-    `core/pool/pool.go`, `core/proxy/proxy.go` (peekJSONError di sini),
-    `core/provider/codebuddy/provider.go`
-- **etteum-pool**: repo publik `github.com/priyo000/etteum-pool` (Bun+Hono+Drizzle —
-  referensi stack sama, tapi private build). Fitur khas: auto-warmup queue,
-  BYOK multi-key, Playwright login bot.
-
-## Konvensi kerja (kesepakatan sama user)
-
-- **Pelan-pelan**, satu langkah per konfirmasi
-- Konfirmasi dulu sebelum implementasi apa pun
-- Bahasa: Indonesian santai
+- **9router**: `/Users/rivanalbaniray/Documents/github/9router/`
+  (executor codebuddy, RTK, translator, accountFallback)
+- **enowx zip**: `9router/enowx-main.zip`, extract di `/tmp/enowx-study/`
+  (provider.go interface, pool.go, proxy.go peekJSONError, warmup)
+- **etteum-pool**: clone di `/tmp/etteum-study/` (dashboard React+Vite+Tailwind
+  ala referensi UI: provider cards, drill-down, TokenUsage, Models table)
+- MCP: `gacor-router` ter-index di codebase-memory (1044 nodes) + enowx-rag

@@ -12,6 +12,7 @@ export interface RequestLogInsert {
   accountId?: number | null;
   accountLabel?: string | null;
   stream?: boolean;
+  source?: string;
   status: "success" | "error";
   httpStatus?: number | null;
   outcome?: string | null;
@@ -33,6 +34,7 @@ export interface RequestLogRow {
   accountId: number | null;
   accountLabel: string | null;
   stream: boolean;
+  source: string;
   status: string;
   httpStatus: number | null;
   outcome: string | null;
@@ -52,6 +54,7 @@ const LIST_COLUMNS = {
   accountId: requestLogs.accountId,
   accountLabel: requestLogs.accountLabel,
   stream: requestLogs.stream,
+  source: requestLogs.source,
   status: requestLogs.status,
   httpStatus: requestLogs.httpStatus,
   outcome: requestLogs.outcome,
@@ -164,4 +167,118 @@ export function modelUsage(): ModelUsageRow[] {
     .groupBy(requestLogs.provider, requestLogs.model)
     .orderBy(sql`sum(${requestLogs.totalTokens}) desc`)
     .all();
+}
+
+// ── Time-ranged usage (dashboard Token Usage card) ───────────────
+
+export type UsageRange = "1d" | "7d" | "30d" | "all";
+
+export interface UsageBucket {
+  // Bucket start, unix ms. 1d → hourly buckets, 7d/30d → daily, all → monthly.
+  t: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requests: number;
+}
+
+export interface UsageReport {
+  range: UsageRange;
+  prompt: number;
+  completion: number;
+  total: number;
+  requests: number;
+  buckets: UsageBucket[];
+  models: ModelUsageRow[];
+}
+
+function rangeStart(range: UsageRange): number | null {
+  // created_at is stored as unix SECONDS (drizzle timestamp mode), so range
+  // math happens in seconds too.
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (range === "1d") return nowSec - 24 * 3600;
+  if (range === "7d") return nowSec - 7 * 24 * 3600;
+  if (range === "30d") return nowSec - 30 * 24 * 3600;
+  return null; // all
+}
+
+// Bucket width in ms + sqlite strftime pattern for the grouping.
+const BUCKET: Record<UsageRange, { ms: number; fmt: string }> = {
+  "1d": { ms: 3600_000, fmt: "%Y-%m-%d %H:00" },
+  "7d": { ms: 86_400_000, fmt: "%Y-%m-%d" },
+  "30d": { ms: 86_400_000, fmt: "%Y-%m-%d" },
+  all: { ms: 30 * 86_400_000, fmt: "%Y-%m" },
+};
+
+export function usageReport(range: UsageRange): UsageReport {
+  const start = rangeStart(range);
+  const bucket = BUCKET[range];
+
+  // created_at is unix seconds — strftime consumes it directly.
+  const bucketExpr = sql`strftime(${bucket.fmt}, ${requestLogs.createdAt}, 'unixepoch')`;
+  const where = start != null ? sql`where ${requestLogs.createdAt} >= ${start}` : sql``;
+
+  const rows = db.all<{
+    bucket: string;
+    prompt: number;
+    completion: number;
+    total: number;
+    requests: number;
+    t: number;
+  }>(sql`
+    select ${bucketExpr} as bucket,
+      coalesce(sum(${requestLogs.promptTokens}), 0) as prompt,
+      coalesce(sum(${requestLogs.completionTokens}), 0) as completion,
+      coalesce(sum(${requestLogs.totalTokens}), 0) as total,
+      count(*) as requests,
+      min(${requestLogs.createdAt}) as t
+    from ${requestLogs}
+    ${where}
+    group by ${bucketExpr}
+    order by t asc
+  `);
+
+  const totals = db.all<{
+    prompt: number;
+    completion: number;
+    total: number;
+    requests: number;
+  }>(sql`
+    select
+      coalesce(sum(${requestLogs.promptTokens}), 0) as prompt,
+      coalesce(sum(${requestLogs.completionTokens}), 0) as completion,
+      coalesce(sum(${requestLogs.totalTokens}), 0) as total,
+      count(*) as requests
+    from ${requestLogs}
+    ${where}
+  `)[0] ?? { prompt: 0, completion: 0, total: 0, requests: 0 };
+
+  const models = db.all<ModelUsageRow>(sql`
+    select ${requestLogs.provider} as provider,
+      ${requestLogs.model} as model,
+      count(*) as requests,
+      coalesce(sum(${requestLogs.promptTokens}), 0) as promptTokens,
+      coalesce(sum(${requestLogs.completionTokens}), 0) as completionTokens,
+      coalesce(sum(${requestLogs.totalTokens}), 0) as totalTokens
+    from ${requestLogs}
+    ${where}
+    group by ${requestLogs.provider}, ${requestLogs.model}
+    order by sum(${requestLogs.totalTokens}) desc
+  `);
+
+  return {
+    range,
+    prompt: totals.prompt,
+    completion: totals.completion,
+    total: totals.total,
+    requests: totals.requests,
+    buckets: rows.map((r) => ({
+      t: r.t * 1000, // stored seconds → ms for the UI
+      promptTokens: r.prompt,
+      completionTokens: r.completion,
+      totalTokens: r.total,
+      requests: r.requests,
+    })),
+    models,
+  };
 }

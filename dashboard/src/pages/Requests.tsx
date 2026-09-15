@@ -53,6 +53,7 @@ export default function Requests() {
       const row: RequestLogRow = {
         createdAt: new Date().toISOString(),
         stream: false,
+        source: "proxy",
         outcome: null,
         model: null,
         accountId: null,
@@ -166,6 +167,9 @@ export default function Requests() {
                     <Badge variant={statusVariant(l.status, l.httpStatus)}>
                       {l.httpStatus ?? l.status}
                     </Badge>
+                    {l.source === "warmup" && (
+                      <Badge variant="secondary" className="ml-1">warmup</Badge>
+                    )}
                   </td>
                   <td className="max-w-[240px] truncate px-4 py-2.5 font-medium">
                     {l.provider}/{l.model ?? "?"}
@@ -211,6 +215,9 @@ export default function Requests() {
                   >
                     {selected.httpStatus ?? selected.status}
                   </Badge>
+                  {selected.source === "warmup" && (
+                    <Badge variant="secondary" className="ml-1 align-middle">warmup</Badge>
+                  )}
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {formatDateTime(selected.createdAt)} · {selected.provider}/{selected.model} ·{" "}

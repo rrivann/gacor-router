@@ -1,0 +1,1 @@
+ALTER TABLE `request_logs` ADD `source` text DEFAULT 'proxy' NOT NULL;

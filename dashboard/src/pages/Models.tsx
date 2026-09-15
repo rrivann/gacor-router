@@ -1,16 +1,31 @@
-import { useEffect, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Copy, RefreshCw, Search } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { fetchModels, type ModelInfo } from "../lib/api";
+import { cn, formatTokens } from "../lib/utils";
+
+// Owner badge palette — keyed by the owned_by string so every vendor reads
+// distinctly (etteum pattern).
+const OWNER_VARIANT: Record<string, "default" | "info" | "success" | "warning" | "secondary"> = {
+  anthropic: "warning",
+  openai: "success",
+  google: "info",
+  deepseek: "default",
+  zhipu: "secondary",
+  moonshot: "secondary",
+  minimax: "secondary",
+};
 
 export default function Models() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [provider, setProvider] = useState("all");
+  const [copied, setCopied] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -29,11 +44,39 @@ export default function Models() {
     load();
   }, []);
 
-  const filtered = models.filter((m) => m.id.toLowerCase().includes(search.toLowerCase()));
-  const byProvider = new Map<string, ModelInfo[]>();
-  for (const m of filtered) {
-    const provider = m.id.split("/")[0] ?? "unknown";
-    byProvider.set(provider, [...(byProvider.get(provider) ?? []), m]);
+  const providers = useMemo(
+    () => [...new Set(models.map((m) => m.id.split("/")[0]!))].sort(),
+    [models]
+  );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = models.filter((m) => {
+      if (provider !== "all" && m.id.split("/")[0] !== provider) return false;
+      if (!q) return true;
+      const name = m.id.split("/").slice(1).join("/");
+      return (
+        name.toLowerCase().includes(q) ||
+        m.id.toLowerCase().includes(q) ||
+        m.owned_by.toLowerCase().includes(q)
+      );
+    });
+    // Group by owner (no-owner last), then by model id within a group —
+    // the table reads as neat vendor sections.
+    const ownerRank = (o: string) => (o ? 0 : 1);
+    return rows.sort((a, b) => {
+      const ra = ownerRank(a.owned_by);
+      const rb = ownerRank(b.owned_by);
+      if (ra !== rb) return ra - rb;
+      if (a.owned_by !== b.owned_by) return a.owned_by.localeCompare(b.owned_by);
+      return a.id.localeCompare(b.id);
+    });
+  }, [models, search, provider]);
+
+  async function copyId(id: string) {
+    await navigator.clipboard.writeText(id);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 1500);
   }
 
   return (
@@ -42,8 +85,8 @@ export default function Models() {
         <div>
           <h1 className="text-2xl font-bold">Models</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Catalogue exposed at /v1/models — address as{" "}
-            <code className="rounded bg-secondary px-1 py-0.5 text-xs">provider/model</code>
+            {models.length} models available across {providers.length}{" "}
+            {providers.length === 1 ? "provider" : "providers"}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
@@ -55,37 +98,169 @@ export default function Models() {
         <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">{error}</div>
       )}
 
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search models…" className="pl-9" />
+      {/* Free-promo models (0x credits) — from the official catalogue */}
+      <div className="rounded-lg border border-success/30 bg-success/5 px-4 py-3">
+        <p className="text-xs font-semibold text-success">🆓 3 models free right now (0x credits)</p>
+        <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1 text-xs text-secondary-foreground">
+          <span><code className="text-success">hy3</code> · free unlimited until 30 Sep 2026</span>
+          <span><code className="text-success">hy4-preview-f</code> · free until 10 Oct 2026</span>
+          <span><code className="text-success">deepseek-v4.1-flash</code> · free until 25 Sep 2026 (1M ctx, multimodal)</span>
+        </div>
       </div>
 
-      {[...byProvider.entries()].map(([provider, list]) => (
-        <div key={provider}>
-          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            {provider} <span className="font-normal">({list.length})</span>
-          </h2>
-          <Card>
-            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg bg-border/60 md:grid-cols-2 lg:grid-cols-3">
-              {list.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => navigator.clipboard.writeText(m.id)}
-                  title="Click to copy"
-                  className="flex items-center justify-between gap-2 bg-card px-4 py-2.5 text-left transition-colors hover:bg-secondary/50"
-                >
-                  <code className="truncate text-sm">{m.id.split("/").slice(1).join("/")}</code>
-                  {m.owned_by && <Badge variant="secondary">{m.owned_by}</Badge>}
-                </button>
-              ))}
-            </div>
-          </Card>
-        </div>
-      ))}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search models, owners…"
+          className="pl-9"
+        />
+      </div>
 
-      {!loading && filtered.length === 0 && (
-        <p className="py-10 text-center text-sm text-muted-foreground">No models match</p>
-      )}
+      {/* Provider filter pills */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {["all", ...providers].map((p) => (
+          <button
+            key={p}
+            onClick={() => setProvider(p)}
+            className={cn(
+              "rounded-md border px-2.5 py-1 text-xs capitalize transition-colors",
+              provider === p
+                ? "border-primary/50 bg-primary/15 text-primary"
+                : "border-border text-secondary-foreground hover:bg-secondary hover:text-foreground"
+            )}
+          >
+            {p === "all" ? "All" : p}
+          </button>
+        ))}
+      </div>
+
+      <Card>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <th className="px-4 py-3">Model</th>
+                <th className="px-4 py-3">Owner</th>
+                <th className="px-4 py-3 text-right">Context</th>
+                <th className="px-4 py-3 text-right">Output</th>
+                <th className="px-4 py-3 text-right">Credits</th>
+                <th className="px-4 py-3">Features</th>
+                <th className="px-4 py-3 text-right">
+                  <span className="sr-only">Copy</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">
+                    {loading ? "Loading…" : "No models match"}
+                  </td>
+                </tr>
+              )}
+              {filtered.map((m) => {
+                const name = m.id.split("/").slice(1).join("/");
+                return (
+                  <tr key={m.id} className="border-b border-border/60 last:border-0 hover:bg-secondary/40">
+                    <td className="px-4 py-2.5">
+                      <div className="flex flex-col">
+                        <code className="text-sm">{name}</code>
+                        {m.name !== name && m.name !== m.id.split("/").slice(1).join("/") && (
+                          <span className="text-[10px] text-muted-foreground">{m.name}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {m.owned_by ? (
+                        <Badge variant={OWNER_VARIANT[m.owned_by] ?? "secondary"} className="normal-case">
+                          {m.owned_by}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-secondary-foreground">
+                      {m.max_input_tokens ? formatTokens(m.max_input_tokens) : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-secondary-foreground">
+                      {m.max_output_tokens ? formatTokens(m.max_output_tokens) : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {m.credit_multiplier == null ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : m.credit_multiplier === 0 ? (
+                        <span className="text-success" title="Free — no credits consumed">🆓 0x</span>
+                      ) : (
+                        <span className="text-secondary-foreground">x{m.credit_multiplier}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex flex-wrap items-center gap-1">
+                        {m.thinking ? (
+                          <Badge
+                            variant="success"
+                            className="normal-case"
+                            title={
+                              m.thinking_toggle === "canDisable"
+                                ? "Reasoning-capable · thinking can be disabled"
+                                : "Reasoning-capable · thinking always on"
+                            }
+                          >
+                            Thinking{m.effort ? ` · ${m.effort}` : ""}
+                          </Badge>
+                        ) : m.thinking_toggle === "canDisable" ? (
+                          <Badge variant="info" className="normal-case" title="Thinking can be enabled">
+                            Thinking optional
+                          </Badge>
+                        ) : null}
+                        {m.thinking && m.thinking_toggle === "canDisable" && (
+                          <span
+                            className="rounded border border-info/40 bg-info/10 px-1 py-0.5 text-[9px] text-info"
+                            title="Thinking can be disabled for this model"
+                          >
+                            ±
+                          </span>
+                        )}
+                        {m.images && (
+                          <Badge variant="secondary" className="normal-case" title="Image input supported">
+                            Img
+                          </Badge>
+                        )}
+                        {m.tool_calls && (
+                          <Badge variant="secondary" className="normal-case" title="Tool calling supported">
+                            Tools
+                          </Badge>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <button
+                        onClick={() => copyId(m.id)}
+                        title={`Copy ${m.id}`}
+                        className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                      >
+                        {copied === m.id ? (
+                          <Check className="h-3.5 w-3.5 text-success" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <p className="text-xs text-muted-foreground">
+        Address a model as{" "}
+        <code className="rounded bg-secondary px-1 py-0.5">provider/model</code> in your client —
+        e.g. <code className="rounded bg-secondary px-1 py-0.5">{filtered[0]?.id ?? "codebuddy/claude-opus-5"}</code>
+      </p>
     </div>
   );
 }

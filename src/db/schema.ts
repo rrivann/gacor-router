@@ -66,6 +66,8 @@ export const requestLogs = sqliteTable(
     accountId: integer("account_id"),
     accountLabel: text("account_label"),
     stream: integer("stream", { mode: "boolean" }).notNull().default(false),
+    // What generated this row: "proxy" (client traffic) or "warmup" (probe).
+    source: text("source").notNull().default("proxy"),
     status: text("status", { mode: "text" }).notNull(), // success | error
     httpStatus: integer("http_status"),
     outcome: text("outcome"), // ok | transient | exhausted | dead (final)

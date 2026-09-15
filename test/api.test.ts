@@ -33,6 +33,7 @@ new Database(dbPath).exec(`
     account_id integer,
     account_label text,
     stream integer default 0 not null,
+    source text default 'proxy' not null,
     status text not null,
     http_status integer,
     outcome text,
@@ -200,11 +201,14 @@ test("/v1/models lists the catalogue namespaced by provider", async () => {
   expect(r.status).toBe(200);
   const body = await r.json();
   expect(body.object).toBe("list");
-  expect(body.data.length).toBe(30);
-  expect(body.data.map((m: any) => m.id)).toContain("codebuddy/claude-opus-5");
-  const opus = body.data.find((m: any) => m.id === "codebuddy/claude-opus-5");
-  expect(opus.owned_by).toBe("anthropic");
-  expect(opus.object).toBe("model");
+  expect(body.data.length).toBe(29);
+  expect(body.data.map((m: any) => m.id)).toContain("codebuddy/gpt-6-astra");
+  const astra = body.data.find((m: any) => m.id === "codebuddy/gpt-6-astra");
+  expect(astra.owned_by).toBe("openai");
+  expect(astra.credit_multiplier).toBe(6.67);
+  expect(astra.thinking).toBe(true);
+  expect(astra.name).toBe("GPT-6-Astra");
+  expect(astra.object).toBe("model");
 });
 
 test("/v1/messages is still a 501 pointing at the working route", async () => {
@@ -630,4 +634,241 @@ test("updating a missing session is a 404", async () => {
     body: JSON.stringify({ title: "x" }),
   });
   expect(r.status).toBe(404);
+});
+
+// ── Process debug ────────────────────────────────────────────────
+
+test("GET /api/debug/process reports cpu, memory, build, uptime", async () => {
+  const r = await manage.request("/debug/process");
+  expect(r.status).toBe(200);
+  const d = await r.json();
+
+  expect(typeof d.process.cpuPercent).toBe("number");
+  expect(d.process.cpuPercent).toBeGreaterThanOrEqual(0);
+  expect(d.process.rss).toBeGreaterThan(0);
+  expect(d.process.pid).toBeGreaterThan(0);
+
+  expect(d.memory.heapUsed).toBeGreaterThan(0);
+  expect(d.memory.heapTotal).toBeGreaterThan(0);
+
+  expect(typeof d.eventLoop.delayMs).toBe("number");
+  expect(d.build.platform).toBe(process.platform);
+  expect(d.build.arch).toBe(process.arch);
+  expect(d.build.numCpu).toBeGreaterThan(0);
+  expect(typeof d.build.bunVersion).toBe("string");
+
+  expect(d.uptimeSeconds).toBeGreaterThanOrEqual(0);
+  expect(typeof d.now).toBe("string");
+});
+
+test("cpu sampling moves between polls (delta window works)", async () => {
+  await manage.request("/debug/process"); // prime the baseline
+  // Burn a little CPU so the delta window has something to measure.
+  let x = 0;
+  for (let i = 0; i < 5_000_000; i++) x += Math.sqrt(i);
+  const r = await manage.request("/debug/process");
+  const d = await r.json();
+  expect(d.process.cpuPercent).toBeGreaterThan(0);
+});
+
+// ── Warmup ───────────────────────────────────────────────────────
+// The probe is a real CodeBuddy-shaped request against glm-5.2; the fetch
+// stub answers with the provider's own response shapes, and classify drives
+// the status update — same as the live path.
+
+test("a healthy probe warms the account, refreshes credit, and keeps it active", async () => {
+  stub = (input) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("billing/meter")) {
+      return new Response(JSON.stringify(USAGE_BILLING), { status: 200 });
+    }
+    return new Response(OK_SSE, { status: 200 });
+  };
+
+  const before = logRows().length;
+  const r = await manage.request("/accounts/1/warmup", { method: "POST" });
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(body.ok).toBe(true);
+  expect(body.outcome).toBe("ok");
+  expect(body.status).toBe("active");
+  expect(body.latencyMs).toBeGreaterThanOrEqual(0);
+  expect(body.credit.remaining).toBe(124);
+  expect(body.credit.limit).toBe(130);
+
+  // The probe is recorded in the request log with source="warmup".
+  const rows = logRows();
+  expect(rows.length).toBe(before + 1);
+  const row = rows[rows.length - 1]!;
+  expect(row.source).toBe("warmup");
+  expect(row.model).toBe("glm-5.2");
+  expect(row.status).toBe("success");
+});
+
+test("a quota probe marks the account exhausted", async () => {
+  stub = () => new Response(`{"error":"insufficient_quota"}`, { status: 429 });
+  const r = await manage.request("/accounts/1/warmup", { method: "POST" });
+  const body = await r.json();
+  expect(body.ok).toBe(false);
+  expect(body.outcome).toBe("exhausted");
+  expect(body.status).toBe("exhausted");
+
+  const acc = await (await manage.request("/accounts")).json();
+  expect(acc.data.find((a: { id: number }) => a.id === 1).status).toBe("exhausted");
+
+  // A good probe later re-arms an exhausted account.
+  stub = (input) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("billing/meter")) return new Response(JSON.stringify(USAGE_BILLING), { status: 200 });
+    return new Response(OK_SSE, { status: 200 });
+  };
+  const r2 = await manage.request("/accounts/1/warmup", { method: "POST" });
+  expect((await r2.json()).status).toBe("active");
+});
+
+test("a dead-marker probe bans the account and a good probe does NOT re-arm it", async () => {
+  stub = () => new Response(`{"code":11140,"msg":"request illegal"}`, { status: 200 });
+  const r = await manage.request("/accounts/1/warmup", { method: "POST" });
+  expect((await r.json()).status).toBe("banned");
+
+  stub = () => new Response(OK_SSE, { status: 200 });
+  const r2 = await manage.request("/accounts/1/warmup", { method: "POST" });
+  const body2 = await r2.json();
+  expect(body2.ok).toBe(true);
+  expect(body2.status).toBe("banned"); // banned needs explicit reactivation
+
+  new Database(dbPath).exec(`UPDATE accounts SET status='active' WHERE id=1`);
+});
+
+test("warmup-all probes the provider's accounts and reports per-account results", async () => {
+  stub = (input) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("billing/meter")) return new Response(JSON.stringify(USAGE_BILLING), { status: 200 });
+    return new Response(OK_SSE, { status: 200 });
+  };
+  const r = await manage.request("/accounts/warmup-all?provider=codebuddy", { method: "POST" });
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(body.success).toBe(true);
+  expect(body.total).toBe(1);
+  expect(body.ok).toBe(1);
+  expect(body.results[0]).toMatchObject({ id: 1, ok: true, status: "active" });
+
+  const missing = await manage.request("/accounts/warmup-all", { method: "POST" });
+  expect(missing.status).toBe(400);
+});
+
+test("account creation warms inline and returns the probe result", async () => {
+  stub = (input) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("billing/meter")) return new Response(JSON.stringify(USAGE_BILLING), { status: 200 });
+    return new Response(OK_SSE, { status: 200 });
+  };
+  const r = await manage.request("/accounts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "codebuddy", label: "warm-new", secret: "tok-warm" }),
+  });
+  expect(r.status).toBe(201);
+  const body = await r.json();
+  expect(body.warmup.ok).toBe(true);
+  expect(body.warmup.status).toBe("active");
+  await manage.request(`/accounts/${body.id}`, { method: "DELETE" });
+});
+
+test("auto-warmup config round-trips and the scheduler warms due accounts only", async () => {
+  // Default: disabled.
+  const def = await (await manage.request("/providers/codebuddy/auto-warmup")).json();
+  expect(def.enabled).toBe(false);
+  expect(def.concurrency).toBe(2);
+  expect(def.skipRecentlyWarmed).toBe(true);
+
+  const put = await manage.request("/providers/codebuddy/auto-warmup", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: true, intervalMinutes: 30, statuses: ["active"], concurrency: 4, skipRecentlyWarmed: false }),
+  });
+  expect(put.status).toBe(200);
+  const cfg = await put.json();
+  expect(cfg).toMatchObject({
+    enabled: true,
+    intervalMinutes: 30,
+    statuses: ["active"],
+    concurrency: 4,
+    skipRecentlyWarmed: false,
+  });
+
+  const got = await (await manage.request("/providers/codebuddy/auto-warmup")).json();
+  expect(got.enabled).toBe(true);
+  expect(got.intervalMinutes).toBe(30);
+  expect(got.concurrency).toBe(4);
+
+  // Scheduler cycle: account was never auto-warmed → due immediately.
+  stub = (input) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("billing/meter")) return new Response(JSON.stringify(USAGE_BILLING), { status: 200 });
+    return new Response(OK_SSE, { status: 200 });
+  };
+  const { autoWarmCycle } = await import("../src/lib/autowarm");
+  const first = await autoWarmCycle();
+  expect(first).toBe(1);
+
+  // Second cycle right after: last-warm + 30m is in the future → nothing due.
+  const second = await autoWarmCycle();
+  expect(second).toBe(0);
+
+  // Disable again so other tests aren't surprised by a background cycle.
+  await manage.request("/providers/codebuddy/auto-warmup", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: false }),
+  });
+});
+
+test("concurrency is clamped to 16 and nonsense values fall back to defaults", async () => {
+  await manage.request("/providers/codebuddy/auto-warmup", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ concurrency: 999 }),
+  });
+  const cfg = await (await manage.request("/providers/codebuddy/auto-warmup")).json();
+  expect(cfg.concurrency).toBe(16);
+});
+
+// ── Usage report (dashboard Token Usage card) ────────────────────
+
+test("GET /api/stats/usage buckets by range and filters old rows out of 1d", async () => {
+  // Seed an old row (~3 days back) + rely on the fresh rows from earlier tests.
+  // created_at is unix seconds (drizzle timestamp mode).
+  const sqlite = new Database(dbPath);
+  const old = Math.floor(Date.now() / 1000) - 3 * 24 * 3600;
+  sqlite.exec(`
+    INSERT INTO request_logs (created_at, provider, model, account_id, account_label, stream, source, status,
+      prompt_tokens, completion_tokens, total_tokens)
+    VALUES (${old}, 'codebuddy', 'old-model', 1, 'acc-1', 0, 'proxy', 'success', 1000, 500, 1500)
+  `);
+
+  const d1 = await (await manage.request("/stats/usage?range=1d")).json();
+  expect(d1.range).toBe("1d");
+  // The old row (1500 tokens, old-model) must NOT appear in the 1d window.
+  expect(d1.models.every((m: { model: string }) => m.model !== "old-model")).toBe(true);
+  expect(d1.buckets.length).toBeGreaterThan(0);
+  expect(d1.total).toBeGreaterThan(0);
+  expect(d1.prompt + d1.completion).toBe(d1.total);
+  // Hourly bucket shape for 1d.
+  const span = Math.max(...d1.buckets.map((b: { t: number }) => b.t)) - Math.min(...d1.buckets.map((b: { t: number }) => b.t));
+  expect(span).toBeLessThan(24 * 3600_000 + 1);
+
+  // 7d includes the old row.
+  const d7 = await (await manage.request("/stats/usage?range=7d")).json();
+  expect(d7.models.some((m: { model: string }) => m.model === "old-model")).toBe(true);
+  expect(d7.total).toBeGreaterThanOrEqual(d1.total);
+
+  // all = everything, monthly buckets.
+  const dall = await (await manage.request("/stats/usage?range=all")).json();
+  expect(dall.total).toBe(d7.total);
+
+  // Unknown range falls back to 1d.
+  const dq = await (await manage.request("/stats/usage?range=bogus")).json();
+  expect(dq.range).toBe("1d");
 });

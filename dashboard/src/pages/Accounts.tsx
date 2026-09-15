@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Eye, EyeOff, Plus, RefreshCw, Search, Trash2, Copy, Check } from "lucide-react";
-import { Card, CardContent } from "../components/ui/card";
+import { Eye, EyeOff, Plus, RefreshCw, Search, Trash2, Copy, Check, ArrowLeft, Flame, Loader2 } from "lucide-react";
+import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input, Select } from "../components/ui/input";
+import { Input } from "../components/ui/input";
 import { Dialog } from "../components/ui/dialog";
-import { Toggle } from "../components/ui/toggle";
 import {
   createAccount,
   deleteAccount,
@@ -15,12 +14,17 @@ import {
   saveSettings,
   setAccountStatus,
   refreshUsage,
+  warmAccount,
+  warmAll,
   type AccountRow,
 } from "../lib/api";
-import { formatDateTime } from "../lib/utils";
+import { formatDateTime, cn } from "../lib/utils";
 import { useTimedMessage } from "../hooks/useTimedMessage";
 import { useWsEvent } from "../hooks/useWebSocket";
 import { CreditCell } from "../components/accounts/CreditCell";
+import { ProviderCards } from "../components/accounts/ProviderCards";
+import { ProviderSettingsModal } from "../components/accounts/ProviderSettingsModal";
+import { ProviderIcon } from "../components/accounts/ProviderIcon";
 
 type BadgeVariant = "success" | "warning" | "error" | "secondary";
 const statusVariant: Record<string, BadgeVariant> = {
@@ -34,10 +38,15 @@ export default function Accounts() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [providerFilter, setProviderFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [rotation, setRotation] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const { message, setMessage, clearMessage } = useTimedMessage<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [addProvider, setAddProvider] = useState("codebuddy");
+  const [settingsProvider, setSettingsProvider] = useState<string | null>(null);
+  const [warming, setWarming] = useState<Record<number, boolean>>({});
+  const [warmingAll, setWarmingAll] = useState(false);
   const [revealed, setRevealed] = useState<Record<number, string>>({});
   const [copied, setCopied] = useState<number | null>(null);
 
@@ -66,8 +75,14 @@ export default function Accounts() {
   useWsEvent("account_status", () => load());
 
   const providers = [...new Set(accounts.map((a) => a.provider))].sort();
-  const filtered = accounts.filter((a) => {
-    if (providerFilter !== "all" && a.provider !== providerFilter) return false;
+
+  // Status counts for the drill-down pills (scoped to the picked provider).
+  const inProvider = providerFilter === "all" ? accounts : accounts.filter((a) => a.provider === providerFilter);
+  const statusCounts: Record<string, number> = { all: inProvider.length };
+  for (const a of inProvider) statusCounts[a.status] = (statusCounts[a.status] ?? 0) + 1;
+
+  const filtered = inProvider.filter((a) => {
+    if (statusFilter !== "all" && a.status !== statusFilter) return false;
     const q = search.toLowerCase();
     return (
       !q ||
@@ -76,6 +91,13 @@ export default function Accounts() {
       String(a.id).includes(q)
     );
   });
+
+  // Entering a provider resets the narrower filters.
+  function selectProvider(p: string) {
+    setProviderFilter(p);
+    setStatusFilter("all");
+    setSearch("");
+  }
 
   function ok(text: string) {
     setMessage(text);
@@ -156,24 +178,90 @@ export default function Accounts() {
     }
   }
 
+  async function handleWarm(id: number) {
+    setWarming((w) => ({ ...w, [id]: true }));
+    try {
+      const r = await warmAccount(id);
+      if (r.ok) ok(`#${id} warm — ${r.status}${r.credit ? ` · ${r.credit.remaining}/${r.credit.limit} credits` : ""}`);
+      else fail(new Error(`#${id} probe failed (${r.outcome})${r.error ? `: ${r.error}` : ""}`));
+      await load();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setWarming((w) => ({ ...w, [id]: false }));
+    }
+  }
+
+  async function handleWarmAll() {
+    if (providerFilter === "all") return;
+    setWarmingAll(true);
+    try {
+      const r = await warmAll(providerFilter);
+      ok(`Warmed ${r.ok}/${r.total} ${providerFilter} accounts`);
+      await load();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setWarmingAll(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Accounts</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Upstream credentials in the pool
-          </p>
+      {providerFilter === "all" ? (
+        /* ── Landing: page header + provider cards ── */
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Accounts</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Upstream credentials in the pool
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            <Button size="sm" onClick={() => { setAddProvider("codebuddy"); setShowAdd(true); }}>
+              <Plus className="h-4 w-4" /> Add Account
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            <Plus className="h-4 w-4" /> Add Account
-          </Button>
+      ) : (
+        /* ── Drill-down: breadcrumb header ala enowx/etteum ── */
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => selectProvider("all")}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+              title="Back to providers"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <ProviderIcon provider={providerFilter} size={28} />
+            <div>
+              <h1 className="flex items-baseline gap-2 text-xl font-bold capitalize">
+                {providerFilter}
+                <span className="text-sm font-normal text-muted-foreground">
+                  {inProvider.length} {inProvider.length === 1 ? "account" : "accounts"}
+                </span>
+              </h1>
+              <p className="text-xs text-muted-foreground">Accounts / {providerFilter}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleWarmAll} disabled={warmingAll}>
+              {warmingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flame className="h-4 w-4" />}
+              Warmup All
+            </Button>
+            <Button size="sm" onClick={() => { setAddProvider(providerFilter); setShowAdd(true); }}>
+              <Plus className="h-4 w-4" /> Add account
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {message && (
         <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
@@ -186,75 +274,80 @@ export default function Accounts() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search accounts…"
-            className="pl-9"
-          />
-        </div>
-        <Select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)} className="sm:w-48">
-          <option value="all">All providers</option>
-          {providers.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </Select>
-      </div>
+      {providerFilter === "all" ? (
+        /* Provider summary cards (click drills in, gear toggles rotation) */
+        <ProviderCards
+          providers={providers}
+          accounts={accounts}
+          selected={providerFilter}
+          rotation={rotation}
+          onSelect={selectProvider}
+          onAdd={(p) => {
+            setAddProvider(p);
+            setShowAdd(true);
+          }}
+          onOpenSettings={setSettingsProvider}
+        />
+      ) : (
+        <>
+          {/* Status filter pills (etteum) + search */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {["all", "active", "exhausted", "banned"].map((s) => {
+                const n = statusCounts[s] ?? 0;
+                const activePill = statusFilter === s;
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setStatusFilter(s)}
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 text-xs capitalize transition-colors",
+                      activePill
+                        ? "border-primary/50 bg-primary/15 text-primary"
+                        : "border-border text-secondary-foreground hover:bg-secondary hover:text-foreground"
+                    )}
+                  >
+                    {s} <span className="tabular-nums opacity-70">({n})</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={`Search ${providerFilter} accounts…`}
+                className="pl-9"
+              />
+            </div>
+          </div>
 
-      {/* Per-provider rotation controls */}
-      {providers.length > 0 && (
-        <Card>
-          <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 p-3">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Rotation
-            </span>
-            {providers.map((p) => (
-              <label key={p} className="flex items-center gap-2 text-sm">
-                <span className="text-secondary-foreground">{p}</span>
-                <Toggle
-                  checked={rotation[p] === "round-robin"}
-                  onChange={(next) => handleRotation(p, next)}
-                  label={`${p} round-robin`}
-                />
-                <span className="text-xs text-muted-foreground">
-                  {rotation[p] === "round-robin" ? "round-robin" : "sticky"}
-                </span>
-              </label>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-4 py-3">ID</th>
-                <th className="px-4 py-3">Provider</th>
-                <th className="px-4 py-3">Label</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Credit</th>
-                <th className="px-4 py-3">Credential</th>
-                <th className="px-4 py-3">Created</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
-                    {loading ? "Loading…" : "No accounts found"}
-                  </td>
-                </tr>
-              )}
-              {filtered.map((a) => (
-                <tr key={a.id} className="border-b border-border/60 last:border-0 hover:bg-secondary/40">
+          <Card>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-4 py-3">ID</th>
+                    <th className="px-4 py-3">Provider</th>
+                    <th className="px-4 py-3">Label</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Credit</th>
+                    <th className="px-4 py-3">Credential</th>
+                    <th className="px-4 py-3">Created</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
+                        {loading ? "Loading…" : `No ${providerFilter} accounts found`}
+                      </td>
+                    </tr>
+                  )}
+                  {filtered.map((a) => (
+                    <tr key={a.id} className="border-b border-border/60 last:border-0 hover:bg-secondary/40">
                   <td className="px-4 py-2.5 tabular-nums text-muted-foreground">#{a.id}</td>
                   <td className="px-4 py-2.5 font-medium">{a.provider}</td>
                   <td className="px-4 py-2.5">{a.label ?? "—"}</td>
@@ -287,6 +380,20 @@ export default function Accounts() {
                   <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatDateTime(a.createdAt)}</td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleWarm(a.id)}
+                        disabled={warming[a.id]}
+                        aria-label="Warmup"
+                        title="Warmup — probe this account (status + credit)"
+                      >
+                        {warming[a.id] ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-warning" />
+                        ) : (
+                          <Flame className="h-4 w-4 text-warning" />
+                        )}
+                      </Button>
                       <Button variant="ghost" size="icon" onClick={() => handleReveal(a.id)} aria-label="Reveal">
                         {revealed[a.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
@@ -307,13 +414,27 @@ export default function Accounts() {
                   </td>
                 </tr>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
+
+      {settingsProvider && (
+        <ProviderSettingsModal
+          provider={settingsProvider}
+          rotation={rotation[settingsProvider]}
+          accounts={accounts}
+          onRotationChange={handleRotation}
+          onClose={() => setSettingsProvider(null)}
+          onError={fail}
+        />
+      )}
 
       <AddAccountDialog
         open={showAdd}
+        initialProvider={addProvider}
         onClose={() => setShowAdd(false)}
         onCreated={async () => {
           setShowAdd(false);
@@ -328,22 +449,29 @@ export default function Accounts() {
 
 function AddAccountDialog({
   open,
+  initialProvider,
   onClose,
   onCreated,
   onError,
 }: {
   open: boolean;
+  initialProvider: string;
   onClose: () => void;
   onCreated: () => void;
   onError: (err: unknown) => void;
 }) {
-  const [provider, setProvider] = useState("codebuddy");
+  const [provider, setProvider] = useState(initialProvider);
   const [label, setLabel] = useState("");
   const [mode, setMode] = useState<"secret" | "creds">("creds");
   const [secret, setSecret] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [refreshToken, setRefreshToken] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // A card's "+ Add account" preselects its provider for the next open.
+  useEffect(() => {
+    if (open) setProvider(initialProvider);
+  }, [open, initialProvider]);
 
   async function submit() {
     setBusy(true);

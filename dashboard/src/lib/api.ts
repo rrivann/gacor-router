@@ -64,6 +64,7 @@ export interface RequestLogRow {
   accountId: number | null;
   accountLabel: string | null;
   stream: boolean;
+  source: string;
   status: string;
   httpStatus: number | null;
   outcome: string | null;
@@ -100,6 +101,15 @@ export interface ModelInfo {
   object: "model";
   created: number;
   owned_by: string;
+  name: string;
+  max_input_tokens: number | null;
+  max_output_tokens: number | null;
+  thinking: boolean;
+  credit_multiplier: number | null;
+  thinking_toggle: "canDisable" | "onlyReasoning" | null;
+  effort: string | null;
+  images: boolean;
+  tool_calls: boolean;
 }
 
 export interface RequestLogEvent {
@@ -143,6 +153,43 @@ export const setAccountStatus = (id: number, status: string) =>
 export const refreshUsage = (id: number) =>
   fetchApi<{ data: CreditUsage }>(`/api/accounts/${id}/usage/refresh`, { method: "POST" });
 
+// ── Warmup ───────────────────────────────────────────────────────
+
+export interface WarmResult {
+  ok: boolean;
+  outcome: string;
+  status: string;
+  latencyMs: number;
+  credit?: { remaining: number; limit: number };
+  error?: string;
+}
+
+export const warmAccount = (id: number) =>
+  fetchApi<WarmResult>(`/api/accounts/${id}/warmup`, { method: "POST" });
+
+export const warmAll = (provider: string, statuses?: string[]) =>
+  fetchApi<{ success: boolean; total: number; ok: number; results: { id: number; ok: boolean; status: string }[] }>(
+    `/api/accounts/warmup-all?provider=${encodeURIComponent(provider)}${statuses?.length ? `&statuses=${statuses.join(",")}` : ""}`,
+    { method: "POST" }
+  );
+
+export interface AutoWarmConfig {
+  enabled: boolean;
+  intervalMinutes: number;
+  statuses: string[];
+  concurrency: number;
+  skipRecentlyWarmed: boolean;
+}
+
+export const fetchAutoWarmConfig = (provider: string) =>
+  fetchApi<AutoWarmConfig>(`/api/providers/${encodeURIComponent(provider)}/auto-warmup`);
+
+export const saveAutoWarmConfig = (provider: string, cfg: Partial<AutoWarmConfig>) =>
+  fetchApi<AutoWarmConfig>(`/api/providers/${encodeURIComponent(provider)}/auto-warmup`, {
+    method: "PUT",
+    body: JSON.stringify(cfg),
+  });
+
 export const fetchRequestLogs = (opts?: { limit?: number; offset?: number; provider?: string }) => {
   const params = new URLSearchParams();
   if (opts?.limit) params.set("limit", String(opts.limit));
@@ -158,6 +205,29 @@ export const fetchRequestDetail = (id: number) =>
 export const fetchDashboardStats = () => fetchApi<DashboardStats>("/api/stats/dashboard");
 
 export const fetchModelUsage = () => fetchApi<{ data: ModelUsageRow[] }>("/api/stats/models");
+
+export type UsageRange = "1d" | "7d" | "30d" | "all";
+
+export interface UsageBucket {
+  t: number; // bucket start, unix ms
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requests: number;
+}
+
+export interface UsageReport {
+  range: UsageRange;
+  prompt: number;
+  completion: number;
+  total: number;
+  requests: number;
+  buckets: UsageBucket[];
+  models: ModelUsageRow[];
+}
+
+export const fetchUsage = (range: UsageRange) =>
+  fetchApi<UsageReport>(`/api/stats/usage?range=${range}`);
 
 export const fetchModels = () => fetchApi<{ object: string; data: ModelInfo[] }>("/v1/models");
 
@@ -220,3 +290,22 @@ export const updateChatSession = (
 
 export const deleteChatSession = (id: number) =>
   fetchApi<{ ok: boolean }>(`/api/chat/sessions/${id}`, { method: "DELETE" });
+
+// ── Process debug ────────────────────────────────────────────────
+
+export interface DebugProcess {
+  process: { cpuPercent: number; rss: number; pid: number };
+  memory: { heapUsed: number; heapTotal: number; external: number; arrayBuffers: number };
+  eventLoop: { delayMs: number };
+  build: {
+    bunVersion: string;
+    nodeVersion: string;
+    platform: string;
+    arch: string;
+    numCpu: number;
+  };
+  uptimeSeconds: number;
+  now: string;
+}
+
+export const fetchDebugProcess = () => fetchApi<DebugProcess>("/api/debug/process");

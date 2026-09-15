@@ -116,6 +116,8 @@ api.post("/v1/messages", async (c) => {
 });
 
 // Model ids are namespaced `provider/model`, matching what clients must send.
+// Token limits + feature flags ride along so the dashboard can render the
+// full catalogue table without a second source.
 api.get("/v1/models", (c) => {
   const data = registry.names().flatMap((name) => {
     const provider = registry.get(name);
@@ -123,7 +125,16 @@ api.get("/v1/models", (c) => {
       id: `${name}/${m.id}`,
       object: "model" as const,
       created: 0,
-      owned_by: m.ownedBy ?? name,
+      owned_by: m.ownedBy ?? "",
+      name: m.name ?? m.id,
+      max_input_tokens: m.maxInputTokens ?? null,
+      max_output_tokens: m.maxOutputTokens ?? null,
+      thinking: m.thinking === true,
+      credit_multiplier: m.creditMultiplier ?? null,
+      thinking_toggle: m.thinkingToggle ?? null,
+      effort: m.effort ?? null,
+      images: m.images === true,
+      tool_calls: m.toolCalls === true,
     }));
   });
   return c.json({ object: "list", data });
