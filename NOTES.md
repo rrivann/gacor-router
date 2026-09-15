@@ -5,7 +5,8 @@
 
 ## TL;DR buat session baru
 
-- **HEAD**: `ca87835` — working tree bersih, 239 test pass, typecheck clean
+- **Kode terakhir**: `ca87835` (RTK) — working tree bersih, 239 test pass,
+  typecheck clean. Commit sesudahnya cuma update NOTES ini.
 - **Sesi terakhir ngerjain**: converter Anthropic (`d69ee3d`) + RTK token
   saver (`ca87835`). Dua-duanya udah di-commit dan di-index ke MCP.
 - **⚠️ BLOCKER**: credit `cb-global-1` **habis (0/100)**. Testing live
