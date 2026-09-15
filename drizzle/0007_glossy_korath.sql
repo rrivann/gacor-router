@@ -1,0 +1,1 @@
+ALTER TABLE `content_filters` ADD `provider_scope` text;

@@ -50,6 +50,30 @@ export const chatSessions = sqliteTable("chat_sessions", {
     .$defaultFn(() => new Date()),
 });
 
+// Content filters: pattern→replacement rules applied to outbound message text
+// before the request leaves. Used to swap words some upstreams block (brand
+// names, tokens) so the traffic goes through cleanly. Deobfuscating the reply
+// is a future extension.
+export const contentFilters = sqliteTable(
+  "content_filters",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    pattern: text("pattern").notNull(),
+    replacement: text("replacement").notNull().default(""),
+    isRegex: integer("is_regex", { mode: "boolean" }).notNull().default(false),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    sort: integer("sort").notNull().default(0),
+    // null = global (apply to every provider). Non-empty JSON array restricts
+    // the rule to those provider names. Empty array is normalized to null in
+    // the API layer so the DB only holds one representation of "global".
+    providerScope: text("provider_scope", { mode: "json" }).$type<string[] | null>(),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [index("idx_content_filters_sort").on(t.sort)]
+);
+
 // One row per completed (or failed) proxied request. The list endpoint omits
 // requestBody/responseBody to stay light; a per-row detail endpoint returns
 // them for the UI drawer. Token columns come from the upstream usage event
@@ -75,9 +99,27 @@ export const requestLogs = sqliteTable(
     promptTokens: integer("prompt_tokens"),
     completionTokens: integer("completion_tokens"),
     totalTokens: integer("total_tokens"),
+    // Cached tokens hit on the upstream — sum of read + write. Kept as an
+    // aggregate for the compact list view; the drawer splits via
+    // cacheWriteTokens (cache_read = cachedTokens - cacheWriteTokens).
+    cachedTokens: integer("cached_tokens"),
+    // Cache creation portion (remove's cache_creation_input_tokens or Tencent's
+    // prompt_cache_write_tokens). Null when upstream doesn't split, or a plain
+    // cache read (no write happened this turn).
+    cacheWriteTokens: integer("cache_write_tokens"),
+    // Reasoning-model output split (a subset of completion_tokens). Null when
+    // upstream doesn't split (non-reasoning models, models that inline it).
+    reasoningTokens: integer("reasoning_tokens"),
+    // Time-to-first-token: wall-clock ms from proxy pick → first non-empty
+    // content delta. A responsiveness signal separate from total durationMs.
+    ttftMs: integer("ttft_ms"),
     // Upstream-reported credit cost (CodeBuddy usage event), when metered.
     // Fractional — a request can cost e.g. 0.57 credits.
     creditUsed: real("credit_used"),
+    // Retail-equivalent USD cost computed from src/lib/pricing.ts. Null when
+    // the model isn't in the pricing table. Independent of upstream credit —
+    // useful for comparing gateway savings vs direct API spend.
+    dollarCost: real("dollar_cost"),
     errorMessage: text("error_message"),
     requestBody: text("request_body"),
     responseBody: text("response_body"),
