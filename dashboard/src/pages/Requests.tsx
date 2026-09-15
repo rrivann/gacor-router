@@ -63,7 +63,12 @@ export default function Requests() {
         promptTokens: null,
         completionTokens: null,
         totalTokens: null,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+        reasoningTokens: null,
+        ttftMs: null,
         creditUsed: null,
+        dollarCost: null,
         errorMessage: null,
         ...ev,
         provider: ev.provider ?? "",
@@ -137,19 +142,21 @@ export default function Requests() {
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="px-4 py-3">Time</th>
-                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">User</th>
                 <th className="px-4 py-3">Model</th>
-                <th className="px-4 py-3">Account</th>
-                <th className="px-4 py-3 text-right">Tokens</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3 text-right">In</th>
+                <th className="px-4 py-3 text-right">Cached</th>
+                <th className="px-4 py-3 text-right">Out</th>
+                <th className="px-4 py-3 text-right">TTFT</th>
+                <th className="px-4 py-3 text-right">Latency</th>
                 <th className="px-4 py-3 text-right">Credit</th>
-                <th className="px-4 py-3 text-right">Duration</th>
-                <th className="px-4 py-3">Error</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
+                  <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
                     {loading ? "Loading…" : "No requests yet"}
                   </td>
                 </tr>
@@ -159,9 +166,14 @@ export default function Requests() {
                   key={l.id}
                   onClick={() => openDetail(l)}
                   className="cursor-pointer border-b border-border/60 last:border-0 hover:bg-secondary/40"
+                  title={l.errorMessage ?? undefined}
                 >
                   <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
                     {formatDateTime(l.createdAt)}
+                  </td>
+                  <td className="px-4 py-2.5 text-secondary-foreground">{l.accountLabel ?? "—"}</td>
+                  <td className="max-w-[240px] truncate px-4 py-2.5 font-medium">
+                    {l.model ?? "?"}
                   </td>
                   <td className="px-4 py-2.5">
                     <Badge variant={statusVariant(l.status, l.httpStatus)}>
@@ -171,12 +183,27 @@ export default function Requests() {
                       <Badge variant="secondary" className="ml-1">warmup</Badge>
                     )}
                   </td>
-                  <td className="max-w-[240px] truncate px-4 py-2.5 font-medium">
-                    {l.provider}/{l.model ?? "?"}
+                  <td className="px-4 py-2.5 text-right tabular-nums text-secondary-foreground">
+                    {l.promptTokens != null ? formatTokens(l.promptTokens) : "—"}
                   </td>
-                  <td className="px-4 py-2.5 text-secondary-foreground">{l.accountLabel ?? "—"}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">
-                    {l.totalTokens != null ? formatTokens(l.totalTokens) : "—"}
+                  <td
+                    className="px-4 py-2.5 text-right tabular-nums text-muted-foreground"
+                    title={
+                      l.cachedTokens != null && l.cachedTokens > 0
+                        ? `Read ${(l.cachedTokens - (l.cacheWriteTokens ?? 0)).toLocaleString()} · Write ${(l.cacheWriteTokens ?? 0).toLocaleString()}`
+                        : undefined
+                    }
+                  >
+                    {l.cachedTokens != null && l.cachedTokens > 0 ? formatTokens(l.cachedTokens) : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-secondary-foreground">
+                    {l.completionTokens != null ? formatTokens(l.completionTokens) : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                    {l.ttftMs != null ? formatDuration(l.ttftMs) : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                    {formatDuration(l.durationMs)}
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums">
                     {l.creditUsed != null && l.creditUsed > 0 ? (
@@ -184,12 +211,6 @@ export default function Requests() {
                     ) : (
                       "—"
                     )}
-                  </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
-                    {formatDuration(l.durationMs)}
-                  </td>
-                  <td className="max-w-[200px] truncate px-4 py-2.5 text-xs text-error">
-                    {l.errorMessage ?? ""}
                   </td>
                 </tr>
               ))}
@@ -233,19 +254,34 @@ export default function Requests() {
               </button>
             </div>
 
-            <div className="mb-4 grid grid-cols-4 gap-3 text-center">
+            <div className="mb-4 grid grid-cols-3 gap-3 text-center sm:grid-cols-4 lg:grid-cols-8">
               {[
-                { label: "Prompt tokens", value: selected.promptTokens },
-                { label: "Completion tokens", value: selected.completionTokens },
-                { label: "Total tokens", value: selected.totalTokens },
-                { label: "Credit used", value: selected.creditUsed, credit: true },
+                { label: "In", value: selected.promptTokens },
+                {
+                  label: "Cache Read",
+                  value:
+                    selected.cachedTokens != null
+                      ? selected.cachedTokens - (selected.cacheWriteTokens ?? 0)
+                      : null,
+                },
+                { label: "Cache Write", value: selected.cacheWriteTokens },
+                { label: "Out", value: selected.completionTokens },
+                { label: "Reasoning", value: selected.reasoningTokens },
+                { label: "TTFT", value: selected.ttftMs, unit: "ms" as const },
+                { label: "Latency", value: selected.durationMs, unit: "ms" as const },
+                { label: "Credit", value: selected.creditUsed, credit: true },
+                { label: "USD ~", value: selected.dollarCost, dollar: true },
               ].map((s) => (
                 <div key={s.label} className="rounded-md border border-border bg-background p-3">
-                  <div className={cn("text-lg font-bold tabular-nums", s.credit && s.value ? "text-primary" : "")}>
+                  <div className={cn("text-lg font-bold tabular-nums", (s.credit || s.dollar) && s.value ? "text-primary" : "")}>
                     {s.value != null
                       ? s.credit
                         ? Number(s.value).toFixed(2)
-                        : s.value.toLocaleString()
+                        : s.dollar
+                          ? `$${Number(s.value).toFixed(4)}`
+                          : s.unit === "ms"
+                            ? formatDuration(s.value as number)
+                            : s.value.toLocaleString()
                       : "—"}
                   </div>
                   <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</div>

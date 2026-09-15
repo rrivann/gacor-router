@@ -1,4 +1,4 @@
-import { Plus, Settings } from "lucide-react";
+import { Flame, Loader2, Plus, RefreshCw, Settings } from "lucide-react";
 import type { AccountRow } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
@@ -64,16 +64,24 @@ export function ProviderCards({
   accounts,
   selected,
   rotation,
+  retrying,
+  warming,
   onSelect,
   onAdd,
+  onRetry,
+  onWarm,
   onOpenSettings,
 }: {
   providers: string[];
   accounts: AccountRow[];
   selected: string; // "all" or a provider name
   rotation: Record<string, string>;
+  retrying: Record<string, boolean>;
+  warming: Record<string, boolean>;
   onSelect: (provider: string) => void;
   onAdd: (provider: string) => void;
+  onRetry: (provider: string) => void;
+  onWarm: (provider: string) => void;
   onOpenSettings: (provider: string) => void;
 }) {
   if (providers.length === 0) return null;
@@ -151,6 +159,32 @@ export function ProviderCards({
                 className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 py-1.5 text-xs font-medium text-secondary-foreground transition-colors hover:bg-secondary hover:text-foreground"
               >
                 <Plus className="h-3.5 w-3.5" /> Add account
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onWarm(p);
+                }}
+                disabled={s.total === 0 || warming[p]}
+                title={s.total === 0 ? "No accounts to warm" : `Warmup all ${p} accounts`}
+                className="shrink-0 rounded-lg border border-border bg-secondary/60 p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {warming[p] ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Flame className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetry(p);
+                }}
+                disabled={s.total === 0 || retrying[p]}
+                title={s.total === 0 ? "No accounts to retry" : `Refresh credit for all ${p} accounts`}
+                className="shrink-0 rounded-lg border border-border bg-secondary/60 p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", retrying[p] && "animate-spin")} />
               </button>
               <button
                 onClick={(e) => {

@@ -43,6 +43,48 @@
       "when": 1789381986927,
       "tag": "0005_crazy_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789484101292,
+      "tag": "0006_dapper_morg",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1789484651334,
+      "tag": "0007_glossy_korath",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1789488753113,
+      "tag": "0008_gray_mister_fear",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1789490317924,
+      "tag": "0009_brave_madame_web",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789491048813,
+      "tag": "0010_wooden_nightcrawler",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1789491265337,
+      "tag": "0011_clammy_crystal",
+      "breakpoints": true
     }
   ]
 }

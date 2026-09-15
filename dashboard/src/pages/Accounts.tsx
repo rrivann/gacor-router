@@ -3,7 +3,7 @@ import { Eye, EyeOff, Plus, RefreshCw, Search, Trash2, Copy, Check, ArrowLeft, F
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
+import { Input, Textarea } from "../components/ui/input";
 import { Dialog } from "../components/ui/dialog";
 import {
   createAccount,
@@ -49,6 +49,10 @@ export default function Accounts() {
   const [warmingAll, setWarmingAll] = useState(false);
   const [revealed, setRevealed] = useState<Record<number, string>>({});
   const [copied, setCopied] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [retryingProvider, setRetryingProvider] = useState<Record<string, boolean>>({});
+  const [warmingProvider, setWarmingProvider] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -118,14 +122,22 @@ export default function Accounts() {
     }
   }
 
-  async function handleDelete(id: number) {
-    if (!confirm(`Delete account #${id}? This cannot be undone.`)) return;
+  function askDelete(id: number, label: string | null) {
+    setDeleteTarget({ id, label: label ?? `#${id}` });
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await deleteAccount(id);
-      ok(`Deleted #${id}`);
+      await deleteAccount(deleteTarget.id);
+      ok(`Deleted ${deleteTarget.label}`);
+      setDeleteTarget(null);
       await load();
     } catch (err) {
       fail(err);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -178,6 +190,53 @@ export default function Accounts() {
     }
   }
 
+  // Header Refresh: reload the accounts list AND fan out a credit refresh for
+  // every account in the current provider scope. Silent per-account failure
+  // (a dead credential) — the list reload still runs and surfaces status.
+  async function handleRefreshAll() {
+    const ids = inProvider.map((a) => a.id);
+    await Promise.allSettled(ids.map((id) => refreshUsage(id)));
+    await load();
+  }
+
+  // Card-scoped warmup: probe every account of one provider. Uses the same
+  // warmAll endpoint the drill-down toolbar hits, so behavior stays identical.
+  async function handleProviderWarm(provider: string) {
+    setWarmingProvider((prev) => ({ ...prev, [provider]: true }));
+    try {
+      const r = await warmAll(provider);
+      ok(`Warmed ${r.ok}/${r.total} ${provider} accounts`);
+      await load();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setWarmingProvider((prev) => {
+        const next = { ...prev };
+        delete next[provider];
+        return next;
+      });
+    }
+  }
+
+  // Card-scoped retry: refresh credit for every account of one provider.
+  // Useful once the pool holds several providers so a single stale card can
+  // be re-checked without hammering everyone.
+  async function handleProviderRetry(provider: string) {
+    const ids = accounts.filter((a) => a.provider === provider).map((a) => a.id);
+    if (ids.length === 0) return;
+    setRetryingProvider((prev) => ({ ...prev, [provider]: true }));
+    try {
+      await Promise.allSettled(ids.map((id) => refreshUsage(id)));
+      await load();
+    } finally {
+      setRetryingProvider((prev) => {
+        const next = { ...prev };
+        delete next[provider];
+        return next;
+      });
+    }
+  }
+
   async function handleWarm(id: number) {
     setWarming((w) => ({ ...w, [id]: true }));
     try {
@@ -218,11 +277,8 @@ export default function Accounts() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={loading}>
               <RefreshCw className="h-4 w-4" /> Refresh
-            </Button>
-            <Button size="sm" onClick={() => { setAddProvider("codebuddy"); setShowAdd(true); }}>
-              <Plus className="h-4 w-4" /> Add Account
             </Button>
           </div>
         </div>
@@ -249,7 +305,7 @@ export default function Accounts() {
             </div>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={loading}>
               <RefreshCw className="h-4 w-4" /> Refresh
             </Button>
             <Button variant="outline" size="sm" onClick={handleWarmAll} disabled={warmingAll}>
@@ -281,11 +337,15 @@ export default function Accounts() {
           accounts={accounts}
           selected={providerFilter}
           rotation={rotation}
+          retrying={retryingProvider}
+          warming={warmingProvider}
           onSelect={selectProvider}
           onAdd={(p) => {
             setAddProvider(p);
             setShowAdd(true);
           }}
+          onRetry={handleProviderRetry}
+          onWarm={handleProviderWarm}
           onOpenSettings={setSettingsProvider}
         />
       ) : (
@@ -328,7 +388,7 @@ export default function Accounts() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                    <th className="px-4 py-3">ID</th>
+                    <th className="px-4 py-3">#</th>
                     <th className="px-4 py-3">Provider</th>
                     <th className="px-4 py-3">Label</th>
                     <th className="px-4 py-3">Status</th>
@@ -346,9 +406,9 @@ export default function Accounts() {
                       </td>
                     </tr>
                   )}
-                  {filtered.map((a) => (
+                  {filtered.map((a, i) => (
                     <tr key={a.id} className="border-b border-border/60 last:border-0 hover:bg-secondary/40">
-                  <td className="px-4 py-2.5 tabular-nums text-muted-foreground">#{a.id}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-muted-foreground" title={`db id ${a.id}`}>{i + 1}</td>
                   <td className="px-4 py-2.5 font-medium">{a.provider}</td>
                   <td className="px-4 py-2.5">{a.label ?? "—"}</td>
                   <td className="px-4 py-2.5">
@@ -407,7 +467,7 @@ export default function Accounts() {
                           Pause
                         </Button>
                       )}
-                      <Button variant="ghost" size="icon" onClick={() => handleDelete(a.id)} aria-label="Delete">
+                      <Button variant="ghost" size="icon" onClick={() => askDelete(a.id, a.label)} aria-label="Delete">
                         <Trash2 className="h-4 w-4 text-error" />
                       </Button>
                     </div>
@@ -435,61 +495,175 @@ export default function Accounts() {
       <AddAccountDialog
         open={showAdd}
         initialProvider={addProvider}
+        existingAccounts={accounts}
         onClose={() => setShowAdd(false)}
         onCreated={async () => {
           setShowAdd(false);
           ok("Account created");
           await load();
         }}
+        onReload={load}
         onError={fail}
       />
+
+      <Dialog
+        open={deleteTarget !== null}
+        onClose={() => !deleting && setDeleteTarget(null)}
+        title="Delete account"
+      >
+        <div className="space-y-4">
+          <p className="text-sm">
+            Delete <span className="font-medium">{deleteTarget?.label}</span>? This cannot be undone.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={confirmDelete} disabled={deleting}>
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
+}
+
+// Decode a JWT payload for client-side dedup. Same shape as the backend
+// helper; kept inline here to avoid pulling node:Buffer into the browser bundle.
+function decodeJwtSub(token: string): string | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const b64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "===".slice((b64.length + 3) % 4);
+    const payload = JSON.parse(atob(padded)) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub.length > 0 ? payload.sub : null;
+  } catch {
+    return null;
+  }
 }
 
 function AddAccountDialog({
   open,
   initialProvider,
+  existingAccounts,
   onClose,
   onCreated,
+  onReload,
   onError,
 }: {
   open: boolean;
   initialProvider: string;
+  existingAccounts: AccountRow[];
   onClose: () => void;
   onCreated: () => void;
+  onReload: () => void;
   onError: (err: unknown) => void;
 }) {
   const [provider, setProvider] = useState(initialProvider);
   const [label, setLabel] = useState("");
-  const [mode, setMode] = useState<"secret" | "creds">("creds");
-  const [secret, setSecret] = useState("");
-  const [accessToken, setAccessToken] = useState("");
   const [refreshToken, setRefreshToken] = useState("");
+  const [bulkTokens, setBulkTokens] = useState("");
+  const [mode, setMode] = useState<"single" | "bulk">("single");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{
+    done: number;
+    total: number;
+    failed: { rt: string; err: string }[];
+    skipped: { rt: string; reason: string }[];
+  } | null>(null);
 
   // A card's "+ Add account" preselects its provider for the next open.
+  // Also clears the token/label fields so a submitted secret doesn't linger.
   useEffect(() => {
-    if (open) setProvider(initialProvider);
+    if (open) {
+      setProvider(initialProvider);
+      setLabel("");
+      setRefreshToken("");
+      setBulkTokens("");
+      setMode("single");
+      setProgress(null);
+    }
   }, [open, initialProvider]);
 
-  async function submit() {
+  async function submitSingle() {
     setBusy(true);
     try {
-      const creds: Record<string, string> = {};
-      if (accessToken.trim()) creds.access_token = accessToken.trim();
-      if (refreshToken.trim()) creds.refresh_token = refreshToken.trim();
+      const rt = refreshToken.trim();
       await createAccount({
         provider: provider.trim(),
         label: label.trim() || undefined,
-        secret: mode === "secret" ? secret.trim() : undefined,
-        creds: mode === "creds" && Object.keys(creds).length > 0 ? creds : undefined,
+        creds: rt ? { refresh_token: rt } : undefined,
       });
       onCreated();
     } catch (err) {
       onError(err);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function submitBulk() {
+    const raw = bulkTokens
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (raw.length === 0) return;
+
+    // Frontend pre-filter: only dedup against duplicates within the paste
+    // itself (RT string + JWT sub). The list endpoint doesn't expose token
+    // values, so pool-scope dedup is the backend's job — it returns 409 and
+    // we surface that as "skipped" below. Same-provider row count is only used
+    // to hint the user in the counter.
+    void existingAccounts;
+    const seenRts = new Set<string>();
+    const seenSubs = new Set<string>();
+
+    setBusy(true);
+    const failed: { rt: string; err: string }[] = [];
+    const skipped: { rt: string; reason: string }[] = [];
+    setProgress({ done: 0, total: raw.length, failed, skipped });
+
+    for (let i = 0; i < raw.length; i++) {
+      const rt = raw[i]!;
+      // Skip if this line duplicates an earlier line in the same paste.
+      if (seenRts.has(rt)) {
+        skipped.push({ rt, reason: "duplicate line in paste" });
+        setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
+        continue;
+      }
+      const sub = decodeJwtSub(rt);
+      if (sub && seenSubs.has(sub)) {
+        skipped.push({ rt, reason: "same JWT sub as earlier line" });
+        setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
+        continue;
+      }
+      try {
+        await createAccount({
+          provider: provider.trim(),
+          creds: { refresh_token: rt },
+        });
+        seenRts.add(rt);
+        if (sub) seenSubs.add(sub);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Backend's 409 for duplicates is expected — surface as "skipped", not "failed".
+        if (msg.includes("already used") || msg.includes("same upstream identity")) {
+          skipped.push({ rt, reason: msg });
+        } else {
+          failed.push({ rt, err: msg });
+        }
+      }
+      setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
+    }
+    setBusy(false);
+    // All clean → close dialog. Otherwise refresh the list in the background
+    // but keep the panel open so the user can see what was skipped/failed.
+    if (failed.length === 0 && skipped.length === 0) {
+      onCreated();
+    } else {
+      onReload();
     }
   }
 
@@ -503,51 +677,107 @@ function AddAccountDialog({
           </label>
           <label className="space-y-1 text-sm">
             <span className="text-xs text-muted-foreground">Label (optional)</span>
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="my-account" />
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={mode === "bulk" ? "auto-derived from JWT" : "my-account"}
+              disabled={mode === "bulk"}
+            />
           </label>
         </div>
 
         <div className="flex gap-2">
           <Button
-            variant={mode === "creds" ? "default" : "outline"}
+            variant={mode === "single" ? "default" : "outline"}
             size="sm"
-            onClick={() => setMode("creds")}
+            onClick={() => setMode("single")}
+            disabled={busy}
           >
-            Token pair
+            Single
           </Button>
           <Button
-            variant={mode === "secret" ? "default" : "outline"}
+            variant={mode === "bulk" ? "default" : "outline"}
             size="sm"
-            onClick={() => setMode("secret")}
+            onClick={() => setMode("bulk")}
+            disabled={busy}
           >
-            Single token
+            Bulk
           </Button>
         </div>
 
-        {mode === "creds" ? (
-          <div className="space-y-3">
-            <label className="block space-y-1 text-sm">
-              <span className="text-xs text-muted-foreground">access_token</span>
-              <Input value={accessToken} onChange={(e) => setAccessToken(e.target.value)} />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-xs text-muted-foreground">refresh_token (optional, enables auto-refresh)</span>
-              <Input value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} />
-            </label>
-          </div>
+        {mode === "single" ? (
+          <label className="block space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">refresh_token</span>
+            <Input value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} />
+            <span className="text-xs text-muted-foreground">
+              The access token is minted on first use and rotated automatically.
+            </span>
+          </label>
         ) : (
           <label className="block space-y-1 text-sm">
-            <span className="text-xs text-muted-foreground">secret / api key</span>
-            <Input value={secret} onChange={(e) => setSecret(e.target.value)} />
+            <span className="text-xs text-muted-foreground">refresh_tokens (one per line)</span>
+            <Textarea
+              value={bulkTokens}
+              onChange={(e) => setBulkTokens(e.target.value)}
+              placeholder={"eyJhbGc…rt1\neyJhbGc…rt2\neyJhbGc…rt3"}
+              className="min-h-32 font-mono text-xs"
+            />
+            <span className="text-xs text-muted-foreground">
+              Each line becomes one account. Labels are derived from each JWT after warmup.
+            </span>
           </label>
         )}
 
+        {progress && (
+          <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="font-medium">
+                Progress: {progress.done} / {progress.total}
+              </span>
+              <span className="text-muted-foreground">
+                {progress.done - progress.failed.length - progress.skipped.length} ok ·{" "}
+                {progress.skipped.length} skipped · {progress.failed.length} failed
+              </span>
+            </div>
+            <div className="h-1 w-full overflow-hidden rounded-full bg-secondary">
+              <div
+                className="h-full rounded-full bg-primary transition-[width]"
+                style={{ width: `${(progress.done / progress.total) * 100}%` }}
+              />
+            </div>
+            {(progress.skipped.length > 0 || progress.failed.length > 0) && (
+              <div className="mt-2 space-y-0.5 max-h-32 overflow-auto">
+                {progress.skipped.map((s, i) => (
+                  <div key={`s${i}`} className="text-warning">
+                    <code className="font-mono">…{s.rt.slice(-12)}</code>: skipped ({s.reason})
+                  </div>
+                ))}
+                {progress.failed.map((f, i) => (
+                  <div key={`f${i}`} className="text-error">
+                    <code className="font-mono">…{f.rt.slice(-12)}</code>: {f.err}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" size="sm" onClick={onClose}>
-            Cancel
+          <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
+            {progress && !busy ? "Close" : "Cancel"}
           </Button>
-          <Button size="sm" onClick={submit} disabled={busy}>
-            {busy ? "Saving…" : "Create"}
+          <Button
+            size="sm"
+            onClick={mode === "single" ? submitSingle : submitBulk}
+            disabled={busy || (mode === "bulk" && bulkTokens.trim().length === 0)}
+          >
+            {busy
+              ? mode === "bulk"
+                ? `Adding ${progress?.done ?? 0}/${progress?.total ?? 0}…`
+                : "Saving…"
+              : mode === "bulk"
+                ? "Create all"
+                : "Create"}
           </Button>
         </div>
       </div>

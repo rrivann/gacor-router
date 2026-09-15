@@ -149,6 +149,31 @@ export default function Chat() {
 
   // ── Streaming ──────────────────────────────────────────────────
   async function callModel(history: ChatMsg[], ac: AbortController): Promise<void> {
+    // Image models take one turn's user text as a prompt and return URLs.
+    // No streaming, no history — every turn is a fresh generation.
+    const selected = models.find((m) => m.id === model);
+    if (selected?.kind === "image") {
+      const lastUser = [...history].reverse().find((m) => m.role === "user");
+      const prompt = lastUser?.content?.trim();
+      if (!prompt) throw new Error("image generation needs a text prompt");
+      const res = await fetch("/v1/images/generations", {
+        method: "POST",
+        signal: ac.signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, prompt, n: 1, size: "1024x1024" }),
+      });
+      if (!res.ok) {
+        throw new Error((await res.text().catch(() => "")) || `request failed (${res.status})`);
+      }
+      const body = (await res.json()) as { data?: { url?: string; b64_json?: string }[] };
+      const urls = (body.data ?? [])
+        .map((d) => d.url ?? (d.b64_json ? `data:image/png;base64,${d.b64_json}` : ""))
+        .filter(Boolean);
+      if (urls.length === 0) throw new Error("image response had no data");
+      setMsgs((p) => [...p, { role: "assistant", content: "", images: urls }]);
+      return;
+    }
+
     const res = await fetch("/v1/chat/completions", {
       method: "POST",
       signal: ac.signal,
@@ -587,17 +612,29 @@ const Conversation = memo(function Conversation({ msgs, busy }: { msgs: ChatMsg[
         }
         return (
           <div key={i} className="flex justify-start">
-            <div className="max-w-[85%] min-w-0">
+            <div className="max-w-[85%] min-w-0 space-y-2">
               {m.reasoning && <ReasoningBlock content={m.reasoning} />}
-              {m.content ? (
-                <TextBlock content={m.content} />
-              ) : last && busy ? (
+              {m.content && <TextBlock content={m.content} />}
+              {m.images && m.images.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {m.images.map((src, j) => (
+                    <a key={j} href={src} target="_blank" rel="noreferrer" className="block">
+                      <img
+                        src={src}
+                        alt="generated"
+                        className="max-h-96 max-w-full rounded-lg border border-border object-contain"
+                      />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {!m.content && !m.images?.length && last && busy && (
                 <div className="flex items-center gap-1.5 py-1 text-muted-foreground">
                   <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.3s]" />
                   <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.15s]" />
                   <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary" />
                 </div>
-              ) : null}
+              )}
             </div>
           </div>
         );

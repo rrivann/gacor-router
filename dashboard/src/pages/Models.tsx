@@ -25,6 +25,7 @@ export default function Models() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
+  const [kind, setKind] = useState<"all" | "chat" | "image">("all");
   const [copied, setCopied] = useState<string | null>(null);
 
   async function load() {
@@ -49,10 +50,17 @@ export default function Models() {
     [models]
   );
 
+  const kindCounts = useMemo(() => {
+    const c = { all: models.length, chat: 0, image: 0 };
+    for (const m of models) c[m.kind]++;
+    return c;
+  }, [models]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const rows = models.filter((m) => {
       if (provider !== "all" && m.id.split("/")[0] !== provider) return false;
+      if (kind !== "all" && m.kind !== kind) return false;
       if (!q) return true;
       const name = m.id.split("/").slice(1).join("/");
       return (
@@ -71,7 +79,7 @@ export default function Models() {
       if (a.owned_by !== b.owned_by) return a.owned_by.localeCompare(b.owned_by);
       return a.id.localeCompare(b.id);
     });
-  }, [models, search, provider]);
+  }, [models, search, provider, kind]);
 
   async function copyId(id: string) {
     await navigator.clipboard.writeText(id);
@@ -118,22 +126,41 @@ export default function Models() {
         />
       </div>
 
-      {/* Provider filter pills */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        {["all", ...providers].map((p) => (
-          <button
-            key={p}
-            onClick={() => setProvider(p)}
-            className={cn(
-              "rounded-md border px-2.5 py-1 text-xs capitalize transition-colors",
-              provider === p
-                ? "border-primary/50 bg-primary/15 text-primary"
-                : "border-border text-secondary-foreground hover:bg-secondary hover:text-foreground"
-            )}
-          >
-            {p === "all" ? "All" : p}
-          </button>
-        ))}
+      {/* Provider + kind filter pills */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {["all", ...providers].map((p) => (
+            <button
+              key={p}
+              onClick={() => setProvider(p)}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs capitalize transition-colors",
+                provider === p
+                  ? "border-primary/50 bg-primary/15 text-primary"
+                  : "border-border text-secondary-foreground hover:bg-secondary hover:text-foreground"
+              )}
+            >
+              {p === "all" ? "All" : p}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-muted-foreground">·</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(["all", "chat", "image"] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setKind(k)}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs capitalize transition-colors",
+                kind === k
+                  ? "border-primary/50 bg-primary/15 text-primary"
+                  : "border-border text-secondary-foreground hover:bg-secondary hover:text-foreground"
+              )}
+            >
+              {k === "all" ? "All kinds" : k} ({kindCounts[k]})
+            </button>
+          ))}
+        </div>
       </div>
 
       <Card>
@@ -198,6 +225,11 @@ export default function Models() {
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex flex-wrap items-center gap-1">
+                        {m.kind === "image" && (
+                          <Badge variant="info" className="normal-case" title="Image generation model">
+                            Image
+                          </Badge>
+                        )}
                         {m.thinking ? (
                           <Badge
                             variant="success"
@@ -208,21 +240,13 @@ export default function Models() {
                                 : "Reasoning-capable · thinking always on"
                             }
                           >
-                            Thinking{m.effort ? ` · ${m.effort}` : ""}
+                            Thinking
                           </Badge>
                         ) : m.thinking_toggle === "canDisable" ? (
                           <Badge variant="info" className="normal-case" title="Thinking can be enabled">
                             Thinking optional
                           </Badge>
                         ) : null}
-                        {m.thinking && m.thinking_toggle === "canDisable" && (
-                          <span
-                            className="rounded border border-info/40 bg-info/10 px-1 py-0.5 text-[9px] text-info"
-                            title="Thinking can be disabled for this model"
-                          >
-                            ±
-                          </span>
-                        )}
                         {m.images && (
                           <Badge variant="secondary" className="normal-case" title="Image input supported">
                             Img

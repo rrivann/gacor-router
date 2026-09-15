@@ -72,7 +72,12 @@ export interface RequestLogRow {
   promptTokens: number | null;
   completionTokens: number | null;
   totalTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  ttftMs: number | null;
   creditUsed: number | null;
+  dollarCost: number | null;
   errorMessage: string | null;
 }
 
@@ -110,6 +115,7 @@ export interface ModelInfo {
   effort: string | null;
   images: boolean;
   tool_calls: boolean;
+  kind: "chat" | "image";
 }
 
 export interface RequestLogEvent {
@@ -290,6 +296,38 @@ export const updateChatSession = (
 
 export const deleteChatSession = (id: number) =>
   fetchApi<{ ok: boolean }>(`/api/chat/sessions/${id}`, { method: "DELETE" });
+
+// ── Content filters ──────────────────────────────────────────────
+
+export interface ContentFilter {
+  id: number;
+  pattern: string;
+  replacement: string;
+  isRegex: boolean;
+  isActive: boolean;
+  sort: number;
+  providerScope: string[] | null;
+  createdAt: string;
+}
+
+export const fetchFilters = () => fetchApi<{ data: ContentFilter[] }>("/api/filters");
+
+export const createFilter = (row: {
+  pattern: string;
+  replacement?: string;
+  isRegex?: boolean;
+  isActive?: boolean;
+  sort?: number;
+  providerScope?: string[] | null;
+}) => fetchApi<{ id: number }>("/api/filters", { method: "POST", body: JSON.stringify(row) });
+
+export const updateFilter = (
+  id: number,
+  patch: Partial<Pick<ContentFilter, "pattern" | "replacement" | "isRegex" | "isActive" | "sort" | "providerScope">>
+) => fetchApi<{ ok: boolean }>(`/api/filters/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+
+export const deleteFilter = (id: number) =>
+  fetchApi<{ ok: boolean }>(`/api/filters/${id}`, { method: "DELETE" });
 
 // ── Process debug ────────────────────────────────────────────────
 

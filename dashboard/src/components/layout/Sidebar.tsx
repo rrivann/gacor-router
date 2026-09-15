@@ -9,6 +9,7 @@ import {
   Moon,
   Globe,
   MessagesSquare,
+  Filter,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
@@ -38,6 +39,7 @@ const sections: { title: string; items: NavItem[] }[] = [
   {
     title: "CONFIG",
     items: [
+      { label: "Filters", path: "/filters", icon: Filter },
       { label: "Tunnel", path: "/tunnel", icon: Globe },
       { label: "Settings", path: "/settings", icon: SettingsIcon },
     ],
