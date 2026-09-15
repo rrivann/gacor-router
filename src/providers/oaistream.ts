@@ -20,6 +20,10 @@ interface RawUsage {
   prompt_cache_write_tokens?: number;
   cached_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
+  // Reasoning-model output split: a subset of completion_tokens that were
+  // spent on the hidden thinking pass (0penAI o1+, DeepSeek, GLM thinking, etc).
+  reasoning_tokens?: number;
+  completion_tokens_details?: { reasoning_tokens?: number };
 }
 
 interface RawToolCall {
@@ -55,21 +59,47 @@ function firstNonZero(...vals: (number | undefined)[]): number {
   return 0;
 }
 
+// Two conventions collide in upstreams that speak 0penAI on the wire:
+//   0penAI/Tencent/CodeBuddy — prompt_tokens INCLUDES cached_tokens
+//     (nested prompt_tokens_details.cached_tokens, or flat cached_tokens /
+//     prompt_cache_hit_tokens). Cost math: total = prompt_tokens (unchanged).
+//   remove-flavored clones — prompt_tokens EXCLUDES cache_read/write
+//     (flat cache_read_input_tokens / cache_creation_input_tokens). Cost
+//     math: total input = prompt_tokens + cache_read + cache_creation.
+//
+// Fold the remove path into the 0penAI convention up front so downstream
+// storage, cost, and dashboard math only ever see one shape (`inputTokens`
+// inclusive of cache, `cacheRead`/`cacheWrite` are subsets). Detection:
+// remove clones emit the flat cache_read/creation fields WITHOUT the nested
+// or flat cached_tokens field — a discriminator borrowed from 9router.
 function readUsage(raw: RawUsage | undefined): Usage | undefined {
   if (!raw) return undefined;
-  const cacheRead = firstNonZero(
-    raw.cache_read_input_tokens,
-    raw.prompt_cache_hit_tokens,
-    raw.prompt_tokens_details?.cached_tokens,
-    raw.cached_tokens
-  );
+
+  // 0penAI-style cache-read comes from the nested or flat cached_tokens field.
+  const openaiCached = firstNonZero(raw.prompt_tokens_details?.cached_tokens, raw.cached_tokens);
+  const anthropicCached = firstNonZero(raw.cache_read_input_tokens, raw.prompt_cache_hit_tokens);
   const cacheWrite = firstNonZero(raw.cache_creation_input_tokens, raw.prompt_cache_write_tokens);
-  const inputTokens = raw.prompt_tokens ?? 0;
+
+  let inputTokens = raw.prompt_tokens ?? 0;
+  let cacheRead: number;
+
+  // remove path: prompt_tokens excludes cache. Fold cache into input so the
+  // stored number reflects total input the upstream actually processed.
+  if (openaiCached === 0 && (anthropicCached > 0 || cacheWrite > 0)) {
+    cacheRead = anthropicCached;
+    inputTokens = inputTokens + cacheRead + cacheWrite;
+  } else {
+    // 0penAI path (or no cache at all): prompt already includes cached_tokens.
+    cacheRead = openaiCached || anthropicCached;
+  }
+
   const outputTokens = raw.completion_tokens ?? 0;
-  if (!inputTokens && !outputTokens && !cacheRead && !cacheWrite && !raw.credit) return undefined;
+  const reasoning = firstNonZero(raw.reasoning_tokens, raw.completion_tokens_details?.reasoning_tokens);
+  if (!inputTokens && !outputTokens && !cacheRead && !cacheWrite && !reasoning && !raw.credit) return undefined;
   const usage: Usage = { inputTokens, outputTokens };
   if (cacheRead) usage.cacheRead = cacheRead;
   if (cacheWrite) usage.cacheWrite = cacheWrite;
+  if (reasoning) usage.reasoning = reasoning;
   if (raw.credit) usage.credit = raw.credit;
   return usage;
 }

@@ -8,6 +8,7 @@
 import type { ChatRequest, StreamEvent } from "../providers/types";
 import type { Attempt, NoAccountError, TapResult, UpstreamError } from "../proxy";
 import { insertRequestLog } from "../db/logs";
+import { computeDollarCost } from "./pricing";
 import { emit, EV_REQUEST_LOG } from "./events";
 
 // Bodies are stored for the detail drawer, but a runaway upstream shouldn't
@@ -38,7 +39,12 @@ export function loggingTap(ctx: LogContext) {
       outcome?: string | null;
       promptTokens?: number | null;
       completionTokens?: number | null;
+      cachedTokens?: number | null;
+      cacheWriteTokens?: number | null;
+      reasoningTokens?: number | null;
+      ttftMs?: number | null;
       creditUsed?: number | null;
+      dollarCost?: number | null;
       errorMessage?: string | null;
       responseBody?: string | null;
     }) {
@@ -83,7 +89,7 @@ export function loggingTap(ctx: LogContext) {
       return emptyStream();
     }
 
-    return persistOnDone(result.stream, persist);
+    return persistOnDone(result.stream, persist, startedAt, ctx.model);
   };
 }
 
@@ -96,16 +102,27 @@ async function* persistOnDone(
     status: "success" | "error";
     promptTokens?: number | null;
     completionTokens?: number | null;
+    cachedTokens?: number | null;
+    cacheWriteTokens?: number | null;
+    reasoningTokens?: number | null;
+    ttftMs?: number | null;
     creditUsed?: number | null;
+    dollarCost?: number | null;
     errorMessage?: string | null;
     responseBody?: string | null;
-  }) => void
+  }) => void,
+  startedAt: number,
+  ctxModel: string
 ): AsyncGenerator<StreamEvent> {
   let text = "";
   let reasoning = "";
   let promptTokens: number | null = null;
   let completionTokens: number | null = null;
+  let cachedTokens: number | null = null;
+  let cacheWriteTokens: number | null = null;
+  let reasoningTokens: number | null = null;
   let creditUsed: number | null = null;
+  let ttftMs: number | null = null;
   let persisted = false;
 
   const done = (outcome: Parameters<typeof persist>[0]) => {
@@ -116,20 +133,50 @@ async function* persistOnDone(
 
   try {
     for await (const ev of stream) {
-      if (ev.text) text += ev.text;
-      if (ev.reasoning) reasoning += ev.reasoning;
+      if (ev.text) {
+        // First non-empty content delta — measures time-to-first-token from
+        // the pool.pick that started the request. Reasoning chunks count too
+        // (they arrive before final content on thinking models).
+        if (ttftMs === null) ttftMs = Date.now() - startedAt;
+        text += ev.text;
+      }
+      if (ev.reasoning) {
+        if (ttftMs === null) ttftMs = Date.now() - startedAt;
+        reasoning += ev.reasoning;
+      }
       if (ev.usage) {
         promptTokens = ev.usage.inputTokens;
         completionTokens = ev.usage.outputTokens;
+        // Aggregate cache in cachedTokens (list view); keep write separate so
+        // the drawer can split (cache_read = cachedTokens - cacheWriteTokens).
+        const cr = ev.usage.cacheRead ?? 0;
+        const cw = ev.usage.cacheWrite ?? 0;
+        if (cr || cw) cachedTokens = cr + cw;
+        if (cw) cacheWriteTokens = cw;
+        if (ev.usage.reasoning) reasoningTokens = ev.usage.reasoning;
         if (ev.usage.credit) creditUsed = ev.usage.credit;
       }
       yield ev;
     }
+    const dollarCost = promptTokens != null && completionTokens != null
+      ? computeDollarCost(ctxModel, {
+          inputTokens: promptTokens,
+          outputTokens: completionTokens,
+          cacheRead: cachedTokens != null && cacheWriteTokens != null ? cachedTokens - cacheWriteTokens : cachedTokens,
+          cacheWrite: cacheWriteTokens,
+          reasoning: reasoningTokens,
+        })
+      : null;
     done({
       status: "success",
       promptTokens,
       completionTokens,
+      cachedTokens,
+      cacheWriteTokens,
+      reasoningTokens,
+      ttftMs,
       creditUsed,
+      dollarCost,
       responseBody: cap(
         safeStringify({ content: text, reasoning: reasoning || undefined }),
         RESPONSE_CAP
@@ -140,6 +187,10 @@ async function* persistOnDone(
       status: "error",
       promptTokens,
       completionTokens,
+      cachedTokens,
+      cacheWriteTokens,
+      reasoningTokens,
+      ttftMs,
       creditUsed,
       errorMessage: err instanceof Error ? err.message : String(err),
       responseBody: cap(safeStringify({ partial: text }), RESPONSE_CAP),
@@ -152,6 +203,10 @@ async function* persistOnDone(
       status: text ? "success" : "error",
       promptTokens,
       completionTokens,
+      cachedTokens,
+      cacheWriteTokens,
+      reasoningTokens,
+      ttftMs,
       creditUsed,
       errorMessage: text ? null : "stream abandoned before any content",
       responseBody: cap(safeStringify({ partial: text }), RESPONSE_CAP),

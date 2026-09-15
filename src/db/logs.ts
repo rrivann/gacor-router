@@ -19,7 +19,12 @@ export interface RequestLogInsert {
   durationMs?: number | null;
   promptTokens?: number | null;
   completionTokens?: number | null;
+  cachedTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  reasoningTokens?: number | null;
+  ttftMs?: number | null;
   creditUsed?: number | null;
+  dollarCost?: number | null;
   errorMessage?: string | null;
   requestBody?: string | null;
   responseBody?: string | null;
@@ -42,7 +47,12 @@ export interface RequestLogRow {
   promptTokens: number | null;
   completionTokens: number | null;
   totalTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  ttftMs: number | null;
   creditUsed: number | null;
+  dollarCost: number | null;
   errorMessage: string | null;
 }
 
@@ -62,7 +72,12 @@ const LIST_COLUMNS = {
   promptTokens: requestLogs.promptTokens,
   completionTokens: requestLogs.completionTokens,
   totalTokens: requestLogs.totalTokens,
+  cachedTokens: requestLogs.cachedTokens,
+  cacheWriteTokens: requestLogs.cacheWriteTokens,
+  reasoningTokens: requestLogs.reasoningTokens,
+  ttftMs: requestLogs.ttftMs,
   creditUsed: requestLogs.creditUsed,
+  dollarCost: requestLogs.dollarCost,
   errorMessage: requestLogs.errorMessage,
 } as const;
 

@@ -125,17 +125,21 @@ test("finish_reason function_call maps onto tool_calls", async () => {
 });
 
 // Cache accounting differs per upstream; all three shapes must land on the same
-// two fields, otherwise cached tokens silently read as zero.
-test("cache tokens are read from the Tencent/CodeBuddy field names", async () => {
+// two fields, otherwise cached tokens silently read as zero. remove-convention
+// upstreams (flat cache_read_input_tokens / cache_creation_input_tokens or
+// Tencent's clones) report prompt_tokens EXCLUSIVE of cache — we fold cache
+// back into inputTokens so storage/cost math sees a single "prompt inclusive
+// of cache" convention across all providers.
+test("cache tokens fold into inputTokens for the Tencent/CodeBuddy shape", async () => {
   const body = `data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1,"prompt_cache_hit_tokens":100,"prompt_cache_write_tokens":7}}\n\ndata: [DONE]\n\n`;
   const evs = await collect(parseSSE(sse(body)));
-  expect(evs[0]!.usage).toEqual({ inputTokens: 5, outputTokens: 1, cacheRead: 100, cacheWrite: 7 });
+  expect(evs[0]!.usage).toEqual({ inputTokens: 112, outputTokens: 1, cacheRead: 100, cacheWrite: 7 });
 });
 
-test("cache tokens are read from the clone field names", async () => {
+test("cache tokens fold into inputTokens for the clone field names", async () => {
   const body = `data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1,"cache_read_input_tokens":50,"cache_creation_input_tokens":3}}\n\ndata: [DONE]\n\n`;
   const evs = await collect(parseSSE(sse(body)));
-  expect(evs[0]!.usage).toEqual({ inputTokens: 5, outputTokens: 1, cacheRead: 50, cacheWrite: 3 });
+  expect(evs[0]!.usage).toEqual({ inputTokens: 58, outputTokens: 1, cacheRead: 50, cacheWrite: 3 });
 });
 
 test("cache tokens are read from the nested OpenAI shape", async () => {
