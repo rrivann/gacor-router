@@ -1,7 +1,7 @@
 # gacor-router — Catatan Lanjutan Proyek
 
 > Dokumen ini untuk lanjut session baru. Baca ini dulu sebelum ngapa-ngapain.
-> Terakhir update: 2026-09-14 (sesi dashboard UI + warmup + katalog verified)
+> Terakhir update: 2026-09-15 (sesi converter Anthropic)
 
 ## Apa ini
 
@@ -16,12 +16,13 @@ format translation, dan token saver. **Single-user, local-first, dipakai sendiri
 ## Status saat ini — SEMUA JALAN
 
 - [x] Backend: Hono + Bun, port 7788, `/health`, `tsc --noEmit` clean
-- [x] **150 test pass, 0 fail** (10 test files)
+- [x] **193 test pass, 0 fail** (11 test files)
 - [x] Provider: **CodeBuddy** lengkap (gzip body, CLI headers, JWT refresh,
   classify markers, peekError JSON-envelope sniff)
 - [x] Pool: sticky/round-robin, skip tried, react → banned/exhausted
 - [x] Proxy: build→fetch→sniff→classify→react→rotate, max 5 attempts
-- [x] Routes: `/v1/chat/completions` (stream+non-stream), `/v1/models`, `/v1/messages` (501 stub)
+- [x] Routes: `/v1/chat/completions` (stream+non-stream), `/v1/models`,
+  **`/v1/messages` (Anthropic, stream+non-stream) — VERIFIED LIVE**
 - [x] Request logging: `request_logs` table, proxy tap, `credit_used` dari usage event
 - [x] Management API `/api/*` + `/ws` live events (account_status, request_log)
 - [x] Tunnel: `/api/tunnel/*` — Cloudflare quick tunnel, auto-download cloudflared
@@ -57,18 +58,53 @@ multi-run). Jangan ubah tanpa konfirmasi LO.
 
 ```
 client → api/index.ts (validate + resolveModel "provider/model")
-       → convert/openai.toCanonical
+       → convert/openai.toCanonical        (/v1/chat/completions)
+         convert/anthropic.toCanonicalFromAnthropic  (/v1/messages)
        → proxy/proxyChat (loop: pool.pick → refresh? → buildRequest → fetch
                           → peekError → classify → react/rotate)
-       → provider.parseStream → toSSE/toCompletion → client
+       → provider.parseStream
+       → toSSE/toCompletion                (OpenAI out)
+         toAnthropicSSE/toAnthropicMessage (Anthropic out)
        └→ logging tap → request_logs + WS event
 ```
 
+- `src/convert/anthropic.ts` — converter Anthropic dua arah (lihat bagian
+  khusus di bawah)
 - `src/lib/warmup.ts` — probe glm-5.2 "hi" → classify → status + credit refresh
 - `src/lib/autowarm.ts` — scheduler (tick 1m, unref'd), config di settings,
   concurrency batching, last-warm persist
 - `src/tunnel/` — cloudflared binary manager + quick tunnel state machine
 - `dashboard/` — React SPA, lazy chunk untuk Chat (syntax highlighter 278KB)
+
+## Converter Anthropic (`/v1/messages`) — spec-complete
+
+Sengaja **bukan** port 1:1 dari 9router; 10 gap spec di sana sudah diperbaiki.
+Riset asal ada di `9router/open-sse/translator/`.
+
+**Invariant paling penting — aritmetika cache:**
+Anthropic `input_tokens` **EKSKLUSIF** cache, OpenAI `prompt_tokens` **INKLUSIF**.
+Jadi `input_tokens = prompt_tokens - cacheRead - cacheWrite`. Terbukti live:
+prompt 182 → `input_tokens 54 + cache_read 128`. Jangan "sederhanakan" ini.
+
+**Beda dari 9router (sengaja):**
+- `input_json_delta` **di-stream per fragmen**, bukan dibuffer sampai finish
+  (verified live: `{` / `"city": "Jakarta` / `"}`) — tool-arg UI progresif jalan
+- `message_delta` sertakan `stop_sequence: null`
+- `ping` diemit setelah `message_start`
+- `tool_choice {type:"none"}` → `"none"` (di 9router salah jadi `"auto"`)
+- `content_filter` → `refusal` (9router gepengkan jadi `end_turn`)
+- non-stream pakai pengurangan cache yang sama dengan stream (9router inkonsisten)
+
+**Keputusan desain:**
+- Terminal event (`message_delta`/`message_stop`) nunggu stream **habis**, bukan
+  pas `finish_reason` — usage sering datang di chunk setelah finish. Ada test-nya.
+- Blok `thinking` di request **dibuang**: signature-nya Anthropic-specific,
+  nggak valid dikirim ke CodeBuddy.
+- `raw` dibangun ulang dalam bentuk **OpenAI**, bukan Anthropic — provider baca
+  `raw` buat passthrough field, kalau dikasih body Anthropic `tool_choice` salah.
+- `message_start.usage` nol: input count belum diketahui saat itu. Klien baca
+  total dari `message_delta`.
+- `top_k`/`metadata`/`thinking.budget_tokens` didrop (nggak ada padanan OpenAI).
 
 ## Cara jalanin
 
@@ -77,7 +113,7 @@ export PATH="$HOME/.bun/bin:$PATH"   # bun WAJIB (nggak di PATH non-login)
 cd /Users/rivanalbaniray/Documents/github/gacor-router
 bun run dev          # watch mode, :7788
 bun run typecheck    # tsc --noEmit
-bun test             # 150 tests
+bun test             # 193 tests
 bun run db:generate  # setelah edit src/db/schema.ts
 bun run db:migrate
 
@@ -115,9 +151,9 @@ bun run dev                   # :5173 proxy → :7788
 
 ## Belum ada / next (tanyakan dulu sebelum gas)
 
-- [ ] Converter Anthropic (`/v1/messages` penuh)
+- [ ] RTK token saver (port dari 9Router) — **next, sudah disetujui LO**
 - [ ] Provider tambahan selain CodeBuddy
-- [ ] RTK token saver (port dari 9Router)
+- [ ] Dashboard belum punya indikator traffic Anthropic vs OpenAI
 
 ## Referensi material (path lokal)
 

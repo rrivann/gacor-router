@@ -211,10 +211,78 @@ test("/v1/models lists the catalogue namespaced by provider", async () => {
   expect(astra.object).toBe("model");
 });
 
-test("/v1/messages is still a 501 pointing at the working route", async () => {
+// ── /v1/messages (Anthropic-compatible) ──────────────────────────
+// Same pool, proxy, and logging as /v1/chat/completions; only the request
+// conversion and the response rendering differ.
+
+test("/v1/messages assembles an Anthropic message", async () => {
+  stub = () => new Response(OK_SSE, { status: 200 });
+  const r = await chat(
+    { model: "codebuddy/claude-opus-5", messages: msgs, max_tokens: 64 },
+    "/v1/messages"
+  );
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(body.type).toBe("message");
+  expect(body.role).toBe("assistant");
+  expect(body.content).toEqual([{ type: "text", text: "hello" }]);
+  expect(body.stop_reason).toBe("end_turn");
+  expect(body.usage).toEqual({ input_tokens: 3, output_tokens: 1 });
+});
+
+test("/v1/messages streams the Anthropic event sequence", async () => {
+  stub = () => new Response(OK_SSE, { status: 200 });
+  const r = await chat(
+    { model: "codebuddy/claude-opus-5", messages: msgs, max_tokens: 64, stream: true },
+    "/v1/messages"
+  );
+  expect(r.status).toBe(200);
+  expect(r.headers.get("Content-Type")).toBe("text/event-stream; charset=utf-8");
+  const text = await r.text();
+  expect(text.startsWith("event: message_start\n")).toBe(true);
+  expect(text).toContain('"text_delta"');
+  expect(text).toContain('"text":"hello"');
+  expect(text).toContain("event: message_stop\n");
+});
+
+// The Anthropic system field is a sibling of messages, not a message; it has
+// to reach the upstream as the leading system turn.
+test("/v1/messages lifts the system field into the upstream messages", async () => {
+  let sent: any = null;
+  stub = (input) => {
+    input
+      .clone()
+      .arrayBuffer()
+      .then((b) => {
+        const { gunzipSync } = require("node:zlib");
+        sent = JSON.parse(gunzipSync(new Uint8Array(b)).toString());
+      });
+    return new Response(OK_SSE, { status: 200 });
+  };
+  await chat(
+    { model: "codebuddy/claude-opus-5", system: "be brief", messages: msgs, max_tokens: 64 },
+    "/v1/messages"
+  );
+  await Bun.sleep(10);
+  expect(sent.messages[0]).toEqual({ role: "system", content: "be brief" });
+  expect(sent.messages[1].content).toBe("hi");
+});
+
+test("/v1/messages errors keep the OpenAI error envelope", async () => {
+  stub = () => new Response(`{"code":11101,"msg":"system message required"}`, { status: 200 });
   const r = await chat({ model: "codebuddy/claude-opus-5", messages: msgs }, "/v1/messages");
-  expect(r.status).toBe(501);
-  expect((await r.json()).error.message).toContain("/v1/chat/completions");
+  expect(r.status).toBe(502);
+  expect((await r.json()).error.message).toContain("11101");
+});
+
+test("/v1/messages requests are logged like any other proxied request", async () => {
+  stub = () => new Response(OK_SSE, { status: 200 });
+  const before = logRows().length;
+  await chat({ model: "codebuddy/claude-opus-5", messages: msgs }, "/v1/messages");
+  const rows = logRows();
+  expect(rows.length).toBe(before + 1);
+  expect(rows[rows.length - 1]!.model).toBe("claude-opus-5");
+  expect(rows[rows.length - 1]!.status).toBe("success");
 });
 
 // ── Management API (/api/*) ──────────────────────────────────────

@@ -1,18 +1,24 @@
 // HTTP routes.
-// - POST /v1/chat/completions  (OpenAI-compatible, wired end-to-end)
-// - POST /v1/messages          (Anthropic-compatible, awaiting its converter)
+// - POST /v1/chat/completions  (OpenAI-compatible)
+// - POST /v1/messages          (Anthropic-compatible)
 // - GET  /v1/models
-// Later: /api/* management endpoints for the dashboard.
+// Management endpoints for the dashboard live in ./manage.
 
 import { Hono } from "hono";
 import { registry } from "../providers";
 import { pool } from "../pool";
 import { proxyChat, NoAccountError, UpstreamError } from "../proxy";
 import { toCanonical, toSSE, toCompletion, type OpenAIBody } from "../convert/openai";
+import {
+  toAnthropicMessage,
+  toAnthropicSSE,
+  toCanonicalFromAnthropic,
+  type AnthropicBody,
+} from "../convert/anthropic";
 import { resolveModel } from "../lib/model";
 import { errorResponse } from "../lib/http";
 import { loggingTap } from "../lib/logging";
-import type { Provider } from "../providers/types";
+import type { ChatRequest, Provider } from "../providers/types";
 
 export const api = new Hono();
 
@@ -20,16 +26,18 @@ interface Resolved {
   provider: Provider;
   providerName: string;
   model: string;
-  body: OpenAIBody;
+  body: Record<string, unknown>;
 }
 
 // Validate and route. Returns a Response on failure, a Resolved on success.
-// Account selection happens inside the proxy, which needs to rotate on failure.
+// Both wire formats agree on `model` and a non-empty `messages` array, which
+// is all that has to be checked before a provider is chosen; account selection
+// happens inside the proxy, which needs to rotate on failure.
 function resolve(raw: unknown): Response | Resolved {
   if (typeof raw !== "object" || raw === null) {
     return errorResponse(400, "invalid_request_error", "body must be a JSON object");
   }
-  const body = raw as Partial<OpenAIBody>;
+  const body = raw as Record<string, unknown>;
 
   if (typeof body.model !== "string" || body.model.length === 0) {
     return errorResponse(400, "invalid_request_error", "`model` must be a non-empty string", "model");
@@ -59,7 +67,7 @@ function resolve(raw: unknown): Response | Resolved {
     );
   }
 
-  return { provider, providerName: route.provider, model: route.model, body: body as OpenAIBody };
+  return { provider, providerName: route.provider, model: route.model, body };
 }
 
 async function readBody(c: { req: { json: () => Promise<unknown> } }): Promise<Response | Resolved> {
@@ -89,30 +97,42 @@ function upstreamFailure(e: unknown): Response {
   return errorResponse(502, "internal_error", e instanceof Error ? e.message : String(e));
 }
 
+// Runs the proxy loop for an already-converted request. The caller decides how
+// the resulting stream is rendered, which is the only thing the two wire
+// formats disagree on by this point.
+function run(r: Resolved, req: ChatRequest, signal: AbortSignal) {
+  return proxyChat(r.provider, pool, req, {
+    signal,
+    tap: loggingTap({ providerName: r.providerName, model: r.model, req, raw: r.body }),
+  });
+}
+
 api.post("/v1/chat/completions", async (c) => {
   const r = await readBody(c);
   if (r instanceof Response) return r;
 
-  const req = toCanonical(r.body, r.model);
+  const req = toCanonical(r.body as unknown as OpenAIBody, r.model);
   try {
-    const { stream } = await proxyChat(r.provider, pool, req, {
-      signal: c.req.raw.signal,
-      tap: loggingTap({ providerName: r.providerName, model: r.model, req, raw: r.body }),
-    });
+    const { stream } = await run(r, req, c.req.raw.signal);
     return req.stream ? toSSE(stream, r.model) : await toCompletion(stream, r.model);
   } catch (e) {
     return upstreamFailure(e);
   }
 });
 
+// Anthropic clients get the same pool, proxy, and logging — only the request
+// conversion and the response rendering differ.
 api.post("/v1/messages", async (c) => {
   const r = await readBody(c);
   if (r instanceof Response) return r;
-  return errorResponse(
-    501,
-    "not_implemented_error",
-    `resolved ${r.providerName}/${r.model}, but the Anthropic request format is not converted yet — use /v1/chat/completions`
-  );
+
+  const req = toCanonicalFromAnthropic(r.body as unknown as AnthropicBody, r.model);
+  try {
+    const { stream } = await run(r, req, c.req.raw.signal);
+    return req.stream ? toAnthropicSSE(stream, r.model) : await toAnthropicMessage(stream, r.model);
+  } catch (e) {
+    return upstreamFailure(e);
+  }
 });
 
 // Model ids are namespaced `provider/model`, matching what clients must send.
