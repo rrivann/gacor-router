@@ -3,6 +3,17 @@
 > Dokumen ini untuk lanjut session baru. Baca ini dulu sebelum ngapa-ngapain.
 > Terakhir update: 2026-09-15 (sesi converter Anthropic + RTK token saver)
 
+## TL;DR buat session baru
+
+- **HEAD**: `ca87835` — working tree bersih, 239 test pass, typecheck clean
+- **Sesi terakhir ngerjain**: converter Anthropic (`d69ee3d`) + RTK token
+  saver (`ca87835`). Dua-duanya udah di-commit dan di-index ke MCP.
+- **⚠️ BLOCKER**: credit `cb-global-1` **habis (0/100)**. Testing live
+  end-to-end nggak bisa jalan. Baca bagian "CREDIT HABIS" di bawah sebelum
+  nyoba curl ke upstream — biar nggak bingung kenapa dapat 503.
+- **Next yang belum digarap**: lihat bagian "Belum ada / next". Semua masih
+  perlu konfirmasi LO dulu.
+
 ## Apa ini
 
 AI gateway personal — proxy OpenAI/Anthropic-compatible dengan account pool,
@@ -13,7 +24,7 @@ format translation, dan token saver. **Single-user, local-first, dipakai sendiri
 - **Dashboard**: React 19 + Vite + Tailwind v4 di `dashboard/`, diserve backend
   di port yang sama (7788). Tema: sky blue, brand "Gacor-Router", favicon petir.
 
-## Status saat ini — SEMUA JALAN
+## Status saat ini — kode semua jalan (credit yang habis)
 
 - [x] Backend: Hono + Bun, port 7788, `/health`, `tsc --noEmit` clean
 - [x] **239 test pass, 0 fail** (12 test files)
@@ -228,4 +239,13 @@ menandai akun `exhausted`, request berikutnya 503 tanpa fetch.
   (provider.go interface, pool.go, proxy.go peekJSONError, warmup)
 - **etteum-pool**: clone di `/tmp/etteum-study/` (dashboard React+Vite+Tailwind
   ala referensi UI: provider cards, drill-down, TokenUsage, Models table)
-- MCP: `gacor-router` ter-index di codebase-memory (1044 nodes) + enowx-rag
+- **MCP** (dua-duanya sinkron di commit `ca87835`):
+  - `codebase-memory` → project `gacor-router`, 1167 nodes / 2527 edges.
+    Re-index: `index_repository(repo_path, name="gacor-router", mode="moderate")`
+    — **WAJIB kasih `name`**, kalau nggak dia bikin project baru dari path
+    (`Users-rivanalbaniray-Documents-...`) dan jadi duplikat.
+  - `enowx-rag` → project `gacor-router`, ~450 chunk. Re-index incremental:
+    `rag_index_project(project_id="gacor-router", directory=<repo>)`.
+- **/tmp itu fana**: `/tmp/enowx-study/` + `/tmp/etteum-study/` bisa kehapus
+  pas reboot. Extract ulang dari zip kalau perlu.
+
