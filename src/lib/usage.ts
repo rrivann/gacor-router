@@ -3,7 +3,7 @@
 // the list endpoint (stale-while-revalidate) and the explicit refresh.
 
 import { registry } from "../providers";
-import { getAccount, updateUsage } from "../db/accounts";
+import { getAccount, setAccountStatus, updateCreds, updateUsage } from "../db/accounts";
 import type { Account, CreditUsage } from "../providers/types";
 
 export class UsageError extends Error {
@@ -38,8 +38,29 @@ export async function fetchAndCacheUsage(accountId: number): Promise<CreditUsage
   }
 
   try {
-    const usage = await provider.usage(toAccount(row));
+    // Mint or rotate the access token first — an RT-only account has no
+    // bearer yet, and a stale AT will 401 the billing endpoint. Persist the
+    // new pair so the next request skips this round-trip.
+    let acc = toAccount(row);
+    if (provider.refresh) {
+      const refreshed = await provider.refresh(acc);
+      if (!refreshed) throw new UsageError("credential invalid — refresh rejected", 401);
+      if (refreshed.creds !== acc.creds) updateCreds(accountId, refreshed.creds);
+      acc = refreshed;
+    }
+
+    const usage = await provider.usage(acc);
     updateUsage(accountId, usage as unknown as Record<string, unknown>);
+    // Reconcile status with the fresh snapshot: an account whose credit went
+    // to zero should stop being picked before the next request wastes a
+    // round-trip on a certain 429; one that refilled (cycle reset) should be
+    // re-armed automatically. `banned` is a credential-level verdict, not a
+    // credit one, so leave it alone.
+    if (usage.remaining <= 0 && row.status === "active") {
+      setAccountStatus(accountId, "exhausted");
+    } else if (usage.remaining > 0 && row.status === "exhausted") {
+      setAccountStatus(accountId, "active");
+    }
     return usage;
   } catch (err) {
     if (err instanceof UsageError) throw err;

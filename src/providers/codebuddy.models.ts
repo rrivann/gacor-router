@@ -273,5 +273,24 @@ export const codebuddyModels: ModelInfo[] = [
   },
   // ── Kept per LO ───────────────────────────────────────────────
   { id: "kimi-k2.5", maxInputTokens: 164_000, maxOutputTokens: 32_000, ownedBy: "moonshot", thinking: true, images: true, toolCalls: true },
+  {
+    id: "kimi-k2.8-preview",
+    name: "Kimi-K2.8 (preview)",
+    maxInputTokens: 256_000,
+    maxOutputTokens: 32_000,
+    ownedBy: "moonshot",
+    thinking: true,
+    effort: "low→max (5 level)",
+    images: true,
+    toolCalls: true,
+  },
   { id: "minimax-m3", maxInputTokens: 512_000, maxOutputTokens: 48_000, ownedBy: "minimax", images: true, toolCalls: true },
+
+  // ── Image generation (kind: "image") ──────────────────────────
+  // Live-probed 2026-09-15: POST /v2/images/generations returns 200 with a
+  // Tencent COS URL in the response. Chat endpoints reject or misroute these
+  // ids, so they only serve /v1/images/generations.
+  { id: "gpt-image-2", name: "GPT Image 2", ownedBy: "openai", kind: "image" },
+  { id: "gemini-2.5-flash-image", name: "Gemini 2.5 Flash Image", ownedBy: "google", kind: "image" },
+  { id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image", ownedBy: "google", kind: "image" },
 ];

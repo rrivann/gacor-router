@@ -8,11 +8,14 @@ import {
   deleteAccount,
   deleteSetting,
   getAccount,
+  listAccounts,
   listAllAccounts,
   listSettings,
   setAccountStatus,
   setSetting,
+  updateLabel,
 } from "../db/accounts";
+import { deriveIdentity, deriveLabel } from "../lib/label";
 import {
   dashboardStats,
   getRequestLog,
@@ -35,6 +38,13 @@ import {
 } from "../db/chats";
 import { debugProcess } from "../lib/debug";
 import { env } from "../lib/env";
+import {
+  createContentFilter,
+  deleteContentFilter,
+  listContentFilters,
+  updateContentFilter,
+} from "../db/filters";
+import { invalidateFilters } from "../lib/filters";
 
 export const manage = new Hono();
 
@@ -63,9 +73,32 @@ manage.post("/accounts", async (c) => {
   if (secret.length === 0 && Object.keys(creds ?? {}).length === 0) {
     return errorResponse(400, "invalid_request_error", "either `secret` or `creds` is required");
   }
+
+  // Dedup: reject a credential whose RT string OR JWT identity (sub) already
+  // sits under the same provider. Two RT strings with matching sub are the
+  // same upstream account — pooling them would double-count quota.
+  const existing = listAccounts(body.provider);
+  const newRt = creds?.refresh_token?.trim();
+  const newSub = deriveIdentity(creds);
+  for (const row of existing) {
+    const rowRt = row.creds?.refresh_token?.trim();
+    if (newRt && rowRt && rowRt === newRt) {
+      return errorResponse(409, "invalid_request_error", `refresh_token already used by account #${row.id}`, "duplicate_account");
+    }
+    const rowSub = deriveIdentity(row.creds);
+    if (newSub && rowSub && rowSub === newSub) {
+      return errorResponse(409, "invalid_request_error", `same upstream identity as account #${row.id} (sub match)`, "duplicate_account");
+    }
+  }
+
+  const userLabel = typeof body.label === "string" && body.label.length > 0 ? body.label : undefined;
+  // JWT-derived default when the user didn't pick one — visible immediately
+  // if creds already carry an AT; otherwise warmup will fill it in after the
+  // first exchange.
+  const initialLabel = userLabel ?? deriveLabel(creds) ?? undefined;
   const id = createAccount({
     provider: body.provider,
-    label: typeof body.label === "string" ? body.label : undefined,
+    label: initialLabel,
     secret,
     creds,
   });
@@ -315,6 +348,124 @@ manage.delete("/chat/sessions/:id", (c) => {
   if (!deleteChatSession(id)) {
     return errorResponse(404, "invalid_request_error", `session #${id} not found`);
   }
+  return c.json({ ok: true });
+});
+
+// ── Content filters ──────────────────────────────────────────────
+// enowx-inspired: pattern→replacement rules applied to outbound message text
+// before the request reaches the provider. Rows expose all fields to the UI
+// so a rule can be toggled/reordered without a re-add.
+
+manage.get("/filters", (c) => c.json({ data: listContentFilters() }));
+
+// Empty array = global (same as null). Any other array must contain non-empty
+// strings, deduped. Anything else fails.
+function normalizeScope(v: unknown): { ok: true; value: string[] | null } | { ok: false; err: string } {
+  if (v === null || v === undefined) return { ok: true, value: null };
+  if (!Array.isArray(v)) return { ok: false, err: "`providerScope` must be an array of strings or null" };
+  const cleaned: string[] = [];
+  for (const item of v) {
+    if (typeof item !== "string") return { ok: false, err: "`providerScope` entries must be strings" };
+    const s = item.trim();
+    if (s.length === 0) continue;
+    if (!cleaned.includes(s)) cleaned.push(s);
+  }
+  return { ok: true, value: cleaned.length === 0 ? null : cleaned };
+}
+
+manage.post("/filters", async (c) => {
+  let body: {
+    pattern?: unknown;
+    replacement?: unknown;
+    isRegex?: unknown;
+    isActive?: unknown;
+    sort?: unknown;
+    providerScope?: unknown;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  if (typeof body.pattern !== "string" || body.pattern.length === 0) {
+    return errorResponse(400, "invalid_request_error", "`pattern` must be a non-empty string", "pattern");
+  }
+  // Validate regex at write time — better to reject a bad rule than silently
+  // drop it later in the engine.
+  if (body.isRegex === true) {
+    try {
+      new RegExp(body.pattern);
+    } catch (e) {
+      return errorResponse(400, "invalid_request_error", `invalid regex: ${e instanceof Error ? e.message : String(e)}`, "pattern");
+    }
+  }
+  const scope = normalizeScope(body.providerScope);
+  if (!scope.ok) return errorResponse(400, "invalid_request_error", scope.err, "providerScope");
+  const id = createContentFilter({
+    pattern: body.pattern,
+    replacement: typeof body.replacement === "string" ? body.replacement : "",
+    isRegex: body.isRegex === true,
+    isActive: body.isActive !== false,
+    sort: typeof body.sort === "number" ? body.sort : 0,
+    providerScope: scope.value,
+  });
+  invalidateFilters();
+  return c.json({ id }, 201);
+});
+
+manage.patch("/filters/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  let body: {
+    pattern?: unknown;
+    replacement?: unknown;
+    isRegex?: unknown;
+    isActive?: unknown;
+    sort?: unknown;
+    providerScope?: unknown;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  const patch: {
+    pattern?: string;
+    replacement?: string;
+    isRegex?: boolean;
+    isActive?: boolean;
+    sort?: number;
+    providerScope?: string[] | null;
+  } = {};
+  if (typeof body.pattern === "string") patch.pattern = body.pattern;
+  if (typeof body.replacement === "string") patch.replacement = body.replacement;
+  if (typeof body.isRegex === "boolean") patch.isRegex = body.isRegex;
+  if (typeof body.isActive === "boolean") patch.isActive = body.isActive;
+  if (typeof body.sort === "number") patch.sort = body.sort;
+  if ("providerScope" in body) {
+    const scope = normalizeScope(body.providerScope);
+    if (!scope.ok) return errorResponse(400, "invalid_request_error", scope.err, "providerScope");
+    patch.providerScope = scope.value;
+  }
+  // Re-validate regex against the effective pattern.
+  const effectivePattern = typeof patch.pattern === "string" ? patch.pattern : undefined;
+  const effectiveRegex = typeof patch.isRegex === "boolean" ? patch.isRegex : undefined;
+  if (effectiveRegex === true && typeof effectivePattern === "string") {
+    try {
+      new RegExp(effectivePattern);
+    } catch (e) {
+      return errorResponse(400, "invalid_request_error", `invalid regex: ${e instanceof Error ? e.message : String(e)}`, "pattern");
+    }
+  }
+  const ok = updateContentFilter(id, patch);
+  if (!ok) return errorResponse(404, "invalid_request_error", `filter #${id} not found`);
+  invalidateFilters();
+  return c.json({ ok: true });
+});
+
+manage.delete("/filters/:id", (c) => {
+  const id = Number(c.req.param("id"));
+  if (!deleteContentFilter(id)) return errorResponse(404, "invalid_request_error", `filter #${id} not found`);
+  invalidateFilters();
   return c.json({ ok: true });
 });
 

@@ -34,6 +34,12 @@ export function updateCreds(id: number, creds: Record<string, string>): void {
   db.update(accounts).set({ creds }).where(eq(accounts.id, id)).run();
 }
 
+// Set a display label. Used when a JWT-derived name becomes available after
+// warmup mints the first access token on an RT-only account.
+export function updateLabel(id: number, label: string): void {
+  db.update(accounts).set({ label }).where(eq(accounts.id, id)).run();
+}
+
 export function getSetting(key: string): string | undefined {
   return db
     .select({ value: settings.value })

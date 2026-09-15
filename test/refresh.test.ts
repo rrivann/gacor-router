@@ -107,6 +107,36 @@ test("a fresh access token skips the refresh round-trip entirely", async () => {
   expect(credWrites).toEqual([]);
 });
 
+test("an RT-only account (no access_token yet) exchanges the refresh token and persists the pair", async () => {
+  const { pool, credWrites, statusWrites } = makePool([
+    row(1, { creds: { refresh_token: "rt-only" } }),
+  ]);
+
+  const calls: string[] = [];
+  const fetchImpl = (async (input: Request | URL | string, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    calls.push(url);
+    if (url.includes("/token/refresh")) {
+      expect(new Headers(init?.headers).get("X-Refresh-Token")).toBe("rt-only");
+      return refreshResponse(VALID_PAIR);
+    }
+    const auth = input instanceof Request ? input.headers.get("Authorization") : null;
+    expect(auth).toBe(`Bearer ${VALID_PAIR.data.accessToken}`);
+    return new Response(OK_SSE, { status: 200 });
+  }) as typeof globalThis.fetch;
+
+  const provider = new CodeBuddyProvider(fetchImpl);
+  const res = await proxyChat(provider, pool, req, { fetch: fetchImpl });
+  expect(res.account.id).toBe(1);
+  expect(await res.stream.next()).toBeTruthy();
+
+  expect(calls[0]).toContain("/token/refresh");
+  expect(credWrites).toEqual([
+    { id: 1, creds: { refresh_token: "rt-new", access_token: VALID_PAIR.data.accessToken } },
+  ]);
+  expect(statusWrites).toEqual([]);
+});
+
 test("a single-token account (no refresh_token) is used as-is", async () => {
   const { pool, credWrites } = makePool([row(1, { secret: "sk-static", creds: null })]);
 

@@ -4,9 +4,10 @@
 // exposes billing. Also used inline on account creation.
 
 import { registry } from "../providers";
-import { getAccount, setAccountStatus, listAccounts } from "../db/accounts";
+import { getAccount, listAccounts, setAccountStatus, updateLabel } from "../db/accounts";
 import { insertRequestLog } from "../db/logs";
 import { fetchAndCacheUsage, UsageError } from "./usage";
+import { deriveLabel } from "./label";
 import { emit, EV_ACCOUNT_STATUS, EV_REQUEST_LOG } from "./events";
 import type { Account, Outcome } from "../providers/types";
 
@@ -64,6 +65,16 @@ export async function warmAccount(
   if (provider.refresh) {
     const refreshed = await provider.refresh(acc);
     if (refreshed) acc = refreshed;
+  }
+
+  // Backfill a JWT-derived label once the AT is available. Only fires when
+  // the row still has no user-set label, so a renamed account is preserved.
+  if (!row.label) {
+    const derived = deriveLabel(acc.creds);
+    if (derived) {
+      updateLabel(acc.id, derived);
+      acc = { ...acc, label: derived };
+    }
   }
 
   // Build the probe the same way a real request is built, then classify the

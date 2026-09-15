@@ -41,10 +41,25 @@ new Database(dbPath).exec(`
     prompt_tokens integer,
     completion_tokens integer,
     total_tokens integer,
+    cached_tokens integer,
+    cache_write_tokens integer,
+    reasoning_tokens integer,
+    ttft_ms integer,
     credit_used real,
+    dollar_cost real,
     error_message text,
     request_body text,
     response_body text
+  );
+  CREATE TABLE content_filters (
+    id integer primary key autoincrement,
+    pattern text not null,
+    replacement text not null default '',
+    is_regex integer not null default 0,
+    is_active integer not null default 1,
+    sort integer not null default 0,
+    provider_scope text,
+    created_at integer not null
   );
   INSERT INTO accounts (provider,label,secret,status,created_at)
     VALUES ('codebuddy','acc-1','token-1','active',0);
@@ -201,7 +216,7 @@ test("/v1/models lists the catalogue namespaced by provider", async () => {
   expect(r.status).toBe(200);
   const body = await r.json();
   expect(body.object).toBe("list");
-  expect(body.data.length).toBe(29);
+  expect(body.data.length).toBe(33);
   expect(body.data.map((m: any) => m.id)).toContain("codebuddy/gpt-6-astra");
   const astra = body.data.find((m: any) => m.id === "codebuddy/gpt-6-astra");
   expect(astra.owned_by).toBe("openai");
@@ -639,6 +654,63 @@ test("usage refresh fetches, caches, and the list row carries it", async () => {
   const row = (await list.json()).data.find((a: { id: number }) => a.id === 1);
   expect(row.usage.limit).toBe(130);
   expect(row.usageAt).toBeTruthy();
+});
+
+test("usage refresh flips an active account to exhausted when credits hit zero", async () => {
+  const zeroCredit = {
+    code: 0,
+    msg: "",
+    data: {
+      Response: {
+        Data: {
+          Accounts: [
+            {
+              PackageName: "Free Plan Subscription",
+              SubProductName: "Free Plan Subscription",
+              SubProductCode: "sp_free",
+              Status: 0,
+              CapacitySize: 100,
+              CapacityUsed: 100,
+              CapacityRemain: 0,
+              CycleCapacitySize: 100,
+              CycleCapacityUsed: 100,
+              CycleCapacityRemain: 0,
+              CapacitySizePrecise: "100",
+              CapacityUsedPrecise: "100",
+              CapacityRemainPrecise: "0",
+              CycleCapacitySizePrecise: "100",
+              CycleCapacityUsedPrecise: "100",
+              CycleCapacityRemainPrecise: "0",
+              CycleEndTime: "2026-09-30 23:59:59",
+            },
+          ],
+        },
+      },
+    },
+  };
+  stub = () => new Response(JSON.stringify(zeroCredit), { status: 200 });
+
+  // Precondition: still active from earlier tests.
+  const before = await manage.request("/accounts");
+  const rowBefore = (await before.json()).data.find((a: { id: number }) => a.id === 1);
+  expect(rowBefore.status).toBe("active");
+
+  const r = await manage.request("/accounts/1/usage/refresh", { method: "POST" });
+  expect(r.status).toBe(200);
+
+  const after = await manage.request("/accounts");
+  const rowAfter = (await after.json()).data.find((a: { id: number }) => a.id === 1);
+  expect(rowAfter.status).toBe("exhausted");
+});
+
+test("usage refresh re-arms an exhausted account when credits refill", async () => {
+  stub = () => new Response(JSON.stringify(USAGE_BILLING), { status: 200 });
+  const r = await manage.request("/accounts/1/usage/refresh", { method: "POST" });
+  expect(r.status).toBe(200);
+
+  const after = await manage.request("/accounts");
+  const row = (await after.json()).data.find((a: { id: number }) => a.id === 1);
+  expect(row.status).toBe("active");
 });
 
 test("usage refresh on a missing account is a 404", async () => {

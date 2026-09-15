@@ -9,6 +9,8 @@ import type {
   Caps,
   ChatRequest,
   CreditUsage,
+  ImageRequest,
+  ImageResponse,
   ModelInfo,
   Outcome,
   Provider,
@@ -228,7 +230,7 @@ export class CodeBuddyProvider implements Provider {
   }
 
   caps(): Caps {
-    return { chat: true, images: true };
+    return { chat: true, images: true, imageGen: true };
   }
 
   models(): ModelInfo[] {
@@ -299,7 +301,10 @@ export class CodeBuddyProvider implements Provider {
     const rt = acc.creds.refresh_token?.trim();
     if (!rt) return acc; // single-token account: nothing to refresh with
 
-    if (!jwtExpiringSoon(bearerFor(acc))) return acc;
+    // An RT-only account has no bearer yet; skip the freshness check and
+    // exchange straight away. Otherwise a fresh access token skips the trip.
+    const bearer = bearerFor(acc);
+    if (bearer && !jwtExpiringSoon(bearer)) return acc;
 
     const doFetch = this.fetchImpl ?? globalThis.fetch;
     let resp: Response;
@@ -338,6 +343,84 @@ export class CodeBuddyProvider implements Provider {
         ...acc.creds,
         access_token: access,
         refresh_token: data.data?.refreshToken?.trim() || rt,
+      },
+    };
+  }
+
+  // Generate an image via CodeBuddy's /v2/images/generations (0penAI-shaped
+  // request, Tencent-wrapped response). Returns the raw response for the
+  // proxy loop to classify + rotate on, plus a parser that unwraps the
+  // envelope into 0penAI's standard shape ({ created, data: [...] }).
+  async image(req: ImageRequest, acc: Account): Promise<{ resp: Response; parse: () => Promise<ImageResponse> }> {
+    const body: Record<string, unknown> = {
+      model: req.model,
+      prompt: req.prompt,
+    };
+    if (typeof req.n === "number") body.n = req.n;
+    if (req.size) body.size = req.size;
+    if (req.quality) body.quality = req.quality;
+    if (req.responseFormat) body.response_format = req.responseFormat;
+    // Passthrough anything else the client sent that the upstream might use.
+    const raw = (typeof req.raw === "object" && req.raw !== null ? req.raw : {}) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(raw)) {
+      if (!(k in body) && k !== "model" && k !== "prompt") body[k] = v;
+    }
+
+    const token = bearerFor(acc);
+    const doFetch = this.fetchImpl ?? globalThis.fetch;
+    const resp = await doFetch("https://www.codebuddy.ai/v2/images/generations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": USER_AGENT,
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Domain": "www.codebuddy.ai",
+        "X-Product": "SaaS",
+        "X-Ide-Type": "CLI",
+        "X-Ide-Name": "CLI",
+        "X-Ide-Version": CLIENT_VERSION,
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    // Response body is the SAME single stream — we can only read it once, so
+    // the parse() closure buffers the text and reuses it. classify() in the
+    // proxy loop will peek first for non-2xx; the ok path calls parse().
+    let cached: string | null = null;
+    const readText = async () => (cached ??= await resp.clone().text());
+
+    return {
+      resp,
+      parse: async () => {
+        const text = await readText();
+        let outer: {
+          code?: number;
+          msg?: string;
+          data?: { created?: number; data?: unknown[] };
+        };
+        try {
+          outer = JSON.parse(text) as typeof outer;
+        } catch {
+          throw new Error(`image response not JSON: ${text.slice(0, 200)}`);
+        }
+        if (outer.code !== 0) {
+          throw new Error(`image error code=${outer.code} msg=${outer.msg}`);
+        }
+        const created = outer.data?.created ?? Math.floor(Date.now() / 1000);
+        const data = Array.isArray(outer.data?.data) ? outer.data.data : [];
+        return {
+          created,
+          data: data.map((d) => {
+            const item = (d ?? {}) as Record<string, unknown>;
+            const out: { url?: string; b64_json?: string; revised_prompt?: string } = {};
+            if (typeof item.url === "string") out.url = item.url;
+            if (typeof item.b64_json === "string") out.b64_json = item.b64_json;
+            if (typeof item.revised_prompt === "string") out.revised_prompt = item.revised_prompt;
+            return out;
+          }),
+        };
       },
     };
   }
