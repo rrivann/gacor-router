@@ -1,7 +1,7 @@
 # gacor-router — Catatan Lanjutan Proyek
 
 > Dokumen ini untuk lanjut session baru. Baca ini dulu sebelum ngapa-ngapain.
-> Terakhir update: 2026-09-15 (sesi converter Anthropic)
+> Terakhir update: 2026-09-15 (sesi converter Anthropic + RTK token saver)
 
 ## Apa ini
 
@@ -16,7 +16,7 @@ format translation, dan token saver. **Single-user, local-first, dipakai sendiri
 ## Status saat ini — SEMUA JALAN
 
 - [x] Backend: Hono + Bun, port 7788, `/health`, `tsc --noEmit` clean
-- [x] **193 test pass, 0 fail** (11 test files)
+- [x] **239 test pass, 0 fail** (12 test files)
 - [x] Provider: **CodeBuddy** lengkap (gzip body, CLI headers, JWT refresh,
   classify markers, peekError JSON-envelope sniff)
 - [x] Pool: sticky/round-robin, skip tried, react → banned/exhausted
@@ -28,6 +28,8 @@ format translation, dan token saver. **Single-user, local-first, dipakai sendiri
 - [x] Tunnel: `/api/tunnel/*` — Cloudflare quick tunnel, auto-download cloudflared
 - [x] Credit tracking: `usage()` via Tencent billing meter, cached, refresh endpoint
 - [x] Warmup: manual + auto-warmup scheduler + warm-on-add (enowx pattern)
+- [x] **RTK token saver** — 12 filter, hook di canonical messages
+  (lihat bagian khusus di bawah)
 - [x] Debug: `/api/debug/process` (CPU self-sample, memory, event loop, build)
 - [x] Chat playground: `chat_sessions` + `/api/chat/sessions` CRUD
 - [x] Dashboard pages: Dashboard (TokenUsage card ala etteum), Accounts
@@ -60,6 +62,7 @@ multi-run). Jangan ubah tanpa konfirmasi LO.
 client → api/index.ts (validate + resolveModel "provider/model")
        → convert/openai.toCanonical        (/v1/chat/completions)
          convert/anthropic.toCanonicalFromAnthropic  (/v1/messages)
+       → rtk.compressMessages (kompres tool output, in-place)
        → proxy/proxyChat (loop: pool.pick → refresh? → buildRequest → fetch
                           → peekError → classify → react/rotate)
        → provider.parseStream
@@ -68,8 +71,8 @@ client → api/index.ts (validate + resolveModel "provider/model")
        └→ logging tap → request_logs + WS event
 ```
 
-- `src/convert/anthropic.ts` — converter Anthropic dua arah (lihat bagian
-  khusus di bawah)
+- `src/convert/anthropic.ts` — converter Anthropic dua arah
+- `src/rtk/` — token saver (constants, filters, detect, index)
 - `src/lib/warmup.ts` — probe glm-5.2 "hi" → classify → status + credit refresh
 - `src/lib/autowarm.ts` — scheduler (tick 1m, unref'd), config di settings,
   concurrency batching, last-warm persist
@@ -140,6 +143,52 @@ bun run dev                   # :5173 proxy → :7788
    body gzip, `default-model-lite` dkk retired (11102) — katalog sudah dipruning.
 7. **KATALOG: jangan hapus/ubah tanpa konfirmasi LO.** Data effort = hasil
    probe live multi-run, bukan asumsi tabel.
+8. **RTK mutasi `req.messages` IN-PLACE.** Jalan sebelum proxy, jadi
+   `request_logs.requestBody` (dari `r.body`, body klien asli) nyimpen versi
+   NGGAK terkompres — sengaja, biar drawer UI nampilin yang user kirim.
+9. **Payload gede (~45KB+) bisa kena 502 HTML dari upstream**, bukan JSON
+   envelope. Kalau lagi debug 502 dengan body gede, curigai batas ukuran dulu.
+
+## RTK token saver (`src/rtk/`)
+
+Port dari `9router/open-sse/rtk/`. Kompres output tool sebelum dikirim ke
+upstream — `git diff`, `grep`, `ls`, build log itu bagian paling gemuk dan
+paling redundan di percakapan agentic.
+
+**Hook di canonical messages, bukan wire body.** Ini beda arsitektur yang
+penting: 9router jalan SETELAH translasi format, jadi butuh 6 cabang bentuk
+pesan (OpenAI tool, OpenAI array, Claude tool_result, Responses, Kiro, dst).
+Kita cuma butuh 1 — `role === "tool"` — dan `/v1/messages` dapat gratis.
+
+**12 filter** (README 9router cuma sebut 10; `git-log` + `build-output`
+nggak terdokumentasi di sana tapi hidup):
+git-diff, git-status, git-log, build-output, grep, find, ls, tree,
+search-list, dedup-log, smart-truncate, read-numbered.
+
+**4 lapis pengaman** — ini yang bikin filter agresif aman:
+1. filter yang throw / return non-string diabaikan
+2. hasil kosong ATAU nggak lebih kecil → buang, pakai teks asli (`>=`, bukan `>`)
+3. tool call gagal nggak disentuh (error trace harus utuh)
+4. di bawah 500 char / di atas 10MB dilewati
+
+**Bug 9router yang diperbaiki:**
+- Gate ukuran di 9router pakai line count dari HEAD 1KB → butuh baris rata-rata
+  <4 char, jadi `read-numbered` + `smart-truncate` praktis **dead code**.
+  Di sini gate pakai line count teks penuh; dua-duanya beneran jalan.
+- `tree` di 9router pakai substring `director`+`file` → path `directory/file.ts`
+  ikut kemakan. Di sini regex di-anchor.
+- `git-status` 9router buang path tanpa marker di bawah `Untracked files:`
+  → repo fresh undercount. Di sini section header dilacak.
+- `*.egg-info` di 9router masuk array exact-match (`.includes`) jadi glob-nya
+  nggak pernah match. Di sini pisah jadi suffix test.
+
+**Kontrol:** setting `rtk_enabled` (default ON, set `"false"` buat matikan)
++ header `X-Token-Saver: off` buat bypass per-request.
+
+**Hasil verified (wire level, body yang beneran dikirim):**
+- build log sintetis: 24.998 → 605 char (**97,6%**)
+- git diff nyata dari repo ini: 47.840 → 16.610 char (**65,3%**),
+  semua baris +/- utuh, cuma preamble `index`/`---`/`+++` yang dibuang
 
 ## Konvensi kerja (kesepakatan sama LO)
 
@@ -147,13 +196,29 @@ bun run dev                   # :5173 proxy → :7788
 - **Konfirmasi dulu sebelum implementasi apa pun** — termasuk hapus/ubah
   katalog, model, data. Jangan pernah hapus sendiri.
 - Bahasa: Indonesian santai
-- Testing live: pakai akun real `cb-global-1` di DB (credit 500+/520)
+- Testing live: akun real `cb-global-1` di DB
+
+## ⚠️ CREDIT HABIS (2026-09-15)
+
+`cb-global-1` sekarang **0/100** (Free Plan Subscription, monthly).
+Upstream balas `429` + `{"code":14018,"msg":"Credits exhausted"}` → pool
+menandai akun `exhausted`, request berikutnya 503 tanpa fetch.
+
+- Model 0x (hy3/hy4-f/deepseek-flash) **tetap butuh saldo non-nol** —
+  multiplier 0 bukan berarti bypass meter. Jangan asumsikan bisa test gratis.
+- Recover: `POST /api/accounts/1/status {"status":"active"}` cuma reset flag,
+  bukan saldo. Perlu credit beneran / nunggu cycle reset.
+- Efeknya: verifikasi live end-to-end nggak bisa sampai credit ada lagi.
+  RTK diverifikasi di **wire level** (stub fetch + inspeksi body gzip)
+  sebagai gantinya — lihat bagian RTK.
 
 ## Belum ada / next (tanyakan dulu sebelum gas)
 
-- [ ] RTK token saver (port dari 9Router) — **next, sudah disetujui LO**
 - [ ] Provider tambahan selain CodeBuddy
+- [ ] Dashboard: toggle RTK + statistik penghematan
 - [ ] Dashboard belum punya indikator traffic Anthropic vs OpenAI
+- [ ] RTK: `is_error` nggak ada di CanonicalMessage, jadi tool call gagal
+      belum bisa di-skip (lapis 3 pengaman kurang presisi vs 9router)
 
 ## Referensi material (path lokal)
 

@@ -36,10 +36,12 @@ Config via env: `PORT` (7788), `HOST` (127.0.0.1), `DB_PATH` (`./gacor.db`).
 
 - `POST /v1/chat/completions` — OpenAI-compatible, streaming and non-streaming
 - `GET /v1/models` — catalogue with token limits and feature flags
-- `POST /v1/messages` — Anthropic-compatible (not converted yet, returns 501)
+- `POST /v1/messages` — Anthropic-compatible, streaming and non-streaming
 
 Models are addressed as `provider/model` (e.g. `codebuddy/claude-opus-5`).
 An unprefixed name falls back to the `default_provider` setting.
+
+Send `X-Token-Saver: off` to bypass the token saver for one request.
 
 **Management** (`/api/*`, consumed by the dashboard)
 
@@ -54,17 +56,37 @@ An unprefixed name falls back to the `default_provider` setting.
 
 ```
 client → api/index.ts          validate + resolve "provider/model"
-       → convert/openai        toCanonical
-       → proxy/proxyChat       pool.pick → refresh → build → fetch
-                               → peekError → classify → react → rotate
-       → provider.parseStream  → toSSE / toCompletion → client
-       └→ logging tap          → request_logs + WS event
+       → convert/               to canonical (OpenAI or Anthropic in)
+       → rtk/                   compress tool output
+       → proxy/proxyChat        pool.pick → refresh → build → fetch
+                                → peekError → classify → react → rotate
+       → provider.parseStream   → render (OpenAI or Anthropic out) → client
+       └→ logging tap           → request_logs + WS event
 ```
 
 The proxy retries on account-level failures (dead credential, spent quota) by
 rotating to the next account, up to 5 attempts. Transient failures (5xx, a
 rate limit scoped to one model) return to the caller instead — rotating
 wouldn't help and the account is still good.
+
+Both wire formats converge on one canonical request shape, so the pool, proxy,
+token saver, and request logging are written once and serve both.
+
+## Token saver
+
+Tool output — `git diff`, `grep`, `ls`, build logs — is the bulkiest and most
+redundant part of an agentic conversation. RTK detects the shape and rewrites
+it densely before the request leaves: a real diff from this repo went from
+47,840 to 16,610 characters on the wire, with every changed line intact.
+
+Twelve filters (`git-diff`, `git-status`, `git-log`, `build-output`, `grep`,
+`find`, `ls`, `tree`, `search-list`, `dedup-log`, `smart-truncate`,
+`read-numbered`) are chosen by sniffing the first 1KB. Compression is discarded
+unless the result is both non-empty and smaller than the input, so a filter
+that misreads its input costs CPU and nothing else.
+
+On by default. Set the `rtk_enabled` setting to `false` to disable it globally,
+or send `X-Token-Saver: off` per request.
 
 ## Layout
 
@@ -74,7 +96,8 @@ src/
 ├── providers/   Provider interface, registry, CodeBuddy, SSE parser
 ├── proxy/       the request loop
 ├── pool/        account selection (sticky / round-robin)
-├── convert/     OpenAI wire format ⇄ canonical
+├── convert/     OpenAI and Anthropic wire formats ⇄ canonical
+├── rtk/         token saver (filters, detection)
 ├── db/          Drizzle schema + queries
 ├── lib/         warmup, autowarm, logging, usage, events, debug
 └── tunnel/      cloudflared binary manager + quick tunnel
@@ -91,11 +114,11 @@ against live probes; don't edit it from the published table alone.
 
 ## Status
 
-Working: the proxy loop, account pool, CodeBuddy provider, request logging,
-management API, live events, warmup, credit tracking, tunnel, and the full
-dashboard (Dashboard, Accounts, Requests, Models, Chat, Tunnel, Settings).
+Working: the proxy loop, account pool, CodeBuddy provider, both wire formats,
+the token saver, request logging, management API, live events, warmup, credit
+tracking, tunnel, and the full dashboard.
 
-Not built yet: the Anthropic converter, providers beyond CodeBuddy, and the
-RTK token saver.
+Not built yet: providers beyond CodeBuddy, and a dashboard surface for the
+token saver.
 
 See `NOTES.md` for working notes, gotchas, and the catalogue's provenance.

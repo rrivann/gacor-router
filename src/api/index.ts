@@ -18,6 +18,8 @@ import {
 import { resolveModel } from "../lib/model";
 import { errorResponse } from "../lib/http";
 import { loggingTap } from "../lib/logging";
+import { compressMessages, formatRtkLog } from "../rtk";
+import { getSetting } from "../db/accounts";
 import type { ChatRequest, Provider } from "../providers/types";
 
 export const api = new Hono();
@@ -97,10 +99,21 @@ function upstreamFailure(e: unknown): Response {
   return errorResponse(502, "internal_error", e instanceof Error ? e.message : String(e));
 }
 
+// RTK is on by default. `X-Token-Saver: off` bypasses it for one request, and
+// the `rtk_enabled` setting turns it off globally.
+function tokenSaverEnabled(c: { req: { header: (n: string) => string | undefined } }): boolean {
+  if (c.req.header("x-token-saver")?.toLowerCase() === "off") return false;
+  return getSetting("rtk_enabled") !== "false";
+}
+
 // Runs the proxy loop for an already-converted request. The caller decides how
 // the resulting stream is rendered, which is the only thing the two wire
 // formats disagree on by this point.
-function run(r: Resolved, req: ChatRequest, signal: AbortSignal) {
+function run(r: Resolved, req: ChatRequest, signal: AbortSignal, saver: boolean) {
+  const stats = compressMessages(req.messages, saver);
+  const line = formatRtkLog(stats);
+  if (line) console.log(line);
+
   return proxyChat(r.provider, pool, req, {
     signal,
     tap: loggingTap({ providerName: r.providerName, model: r.model, req, raw: r.body }),
@@ -113,7 +126,7 @@ api.post("/v1/chat/completions", async (c) => {
 
   const req = toCanonical(r.body as unknown as OpenAIBody, r.model);
   try {
-    const { stream } = await run(r, req, c.req.raw.signal);
+    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c));
     return req.stream ? toSSE(stream, r.model) : await toCompletion(stream, r.model);
   } catch (e) {
     return upstreamFailure(e);
@@ -128,7 +141,7 @@ api.post("/v1/messages", async (c) => {
 
   const req = toCanonicalFromAnthropic(r.body as unknown as AnthropicBody, r.model);
   try {
-    const { stream } = await run(r, req, c.req.raw.signal);
+    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c));
     return req.stream ? toAnthropicSSE(stream, r.model) : await toAnthropicMessage(stream, r.model);
   } catch (e) {
     return upstreamFailure(e);
