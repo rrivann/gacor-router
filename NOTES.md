@@ -1,19 +1,84 @@
 # gacor-router — Catatan Lanjutan Proyek
 
 > Dokumen ini untuk lanjut session baru. Baca ini dulu sebelum ngapa-ngapain.
-> Terakhir update: 2026-09-15 (sesi converter Anthropic + RTK token saver)
+> Terakhir update: 2026-09-16 (sesi besar — Bug 1 fix, image gen, filters, cache/pricing observability)
 
 ## TL;DR buat session baru
 
-- **Kode terakhir**: `ca87835` (RTK) — working tree bersih, 239 test pass,
-  typecheck clean. Commit sesudahnya cuma update NOTES ini.
-- **Sesi terakhir ngerjain**: converter Anthropic (`d69ee3d`) + RTK token
-  saver (`ca87835`). Dua-duanya udah di-commit dan di-index ke MCP.
-- **⚠️ BLOCKER**: credit `cb-global-1` **habis (0/100)**. Testing live
-  end-to-end nggak bisa jalan. Baca bagian "CREDIT HABIS" di bawah sebelum
-  nyoba curl ke upstream — biar nggak bingung kenapa dapat 503.
-- **Next yang belum digarap**: lihat bagian "Belum ada / next". Semua masih
-  perlu konfirmasi LO dulu.
+- **Kode terakhir**: sesi 2026-09-16 landing 33 model catalog, image endpoint
+  live, filters engine + provider scoping, request logs punya TTFT/Cache
+  Read+Write/Reasoning/USD dolar. **242 test pass, typecheck clean.**
+- **Sesi ini beresin banyak:**
+  - Bug 1 (RT-only refresh) — **FIXED** + test khusus
+  - Usage refresh sync status active↔exhausted (fix 429-loop dashboard)
+  - JWT-derived label auto-fill (deriveLabel)
+  - Bulk add account (paste multi-line RT) + dedup (RT string + JWT sub)
+  - `/v1/images/generations` full stack (gpt-image-2 + gemini flash-image ×2)
+  - Chat playground render image inline
+  - Content filters (enowx-inspired): CRUD + hot-reload + regex + provider scoping + inline edit
+  - Request logs cache/reasoning/TTFT/USD dollar (ranking tied 1st vs 9router)
+  - Added `kimi-k2.8-preview` ke katalog (verified live)
+- **⚠️ BLOCKER masih valid**: credit `cb-global-1` **habis (0/100)**. Reset
+  ~30 Sep 2026. Tapi ada 2 akun tambahan (id 10 & 11 Bonus Pack, ~466 credit
+  each) buat testing. Warmup skenario butuh saldo di salah satu akun.
+- **Skipped intentional:**
+  - Video gen seedance-2.5 — POST works, polling belum ketemu. Butuh trace
+    network dashboard CodeBuddy. Detail di [reference_video_endpoint.md](/Users/rivanalbaniray/.claude/projects/-Users-rivanalbaniray-Documents-github-gacor-router/memory/reference_video_endpoint.md)
+  - Cache marker injection (etteum) — dead code untuk CodeBuddy (marker
+    `remove: {type:"ephemeral"}` di-strip). Detail di [reference_cache_markers.md](/Users/rivanalbaniray/.claude/projects/-Users-rivanalbaniray-Documents-github-gacor-router/memory/reference_cache_markers.md)
+  - Bug 2 warmup persist creds — belum diperbaiki, tapi impact rendah karena
+    Bug 1 fix + usage.ts refresh persist sudah nutup skenario worst-case.
+
+## Ringkasan sesi 2026-09-16 (major)
+
+### Auth & account
+- **Bug 1 fixed** — `refresh()` di [providers/codebuddy.ts:302](src/providers/codebuddy.ts:302) skip freshness check kalau bearer kosong (RT-only account) → langsung exchange
+- **Usage refresh sync status** — [src/lib/usage.ts:48-52](src/lib/usage.ts:48) reconcile status vs credit remaining. `refresh()` juga sekarang jalan sebelum `usage()` (RT-only Load button jalan)
+- **JWT-derived label** — `deriveLabel(creds)` [src/lib/label.ts](src/lib/label.ts) auto-fill dari `preferred_username`/`email`/`sub`. Warmup backfill label existing kalau null.
+- **Bulk add account** — textarea multi-line di AddAccountDialog + progress panel (ok/skipped/failed per-RT)
+- **Dedup 409** — POST /accounts tolak RT string duplicate atau JWT sub duplicate (`deriveIdentity`). Same provider only.
+
+### Image generation (full stack)
+- Endpoint `/v2/images/generations` di CodeBuddy reverse-engineered
+- Provider interface: `Provider.image?()` + `ImageRequest`/`ImageResponse`
+- Route baru `POST /v1/images/generations` (0penAI-compat, non-stream)
+- Proxy loop `proxyImage()` (rotation + refresh, tanpa stream)
+- Katalog: 3 model image (`gpt-image-2`, `gemini-2.5-flash-image`, `gemini-3.1-flash-image`)
+- Field `kind: "chat" | "image"` di ModelInfo, badge + filter di dashboard Models
+- Chat playground: kalau model `kind:"image"`, POST ke images endpoint, render `<img>` inline
+
+### Filters (enowx-inspired + 9router provider scoping)
+- Table `content_filters` migration + Drizzle
+- Engine [src/lib/filters.ts](src/lib/filters.ts) — compile once cached, apply ke canonical messages, hot-reload via `invalidateFilters()`
+- Regex atau literal (auto-escape), sort order, is_active toggle
+- Provider scoping `providerScope: string[] | null` — null=global, `[]` auto-normalize ke null
+- Management API `/api/filters` (GET/POST/PATCH/DELETE) dengan regex validation
+- Dashboard page `/filters` dengan inline scope edit popover (klik badge → checkbox list)
+- Hook di api/index.ts sebelum RTK compression
+
+### Request logs observability (etteum-style + 9router-style)
+- Kolom layout: Time · User · Model · Status · In · Cached · Out · TTFT · Latency · Credit
+- Model tanpa prefix `provider/`, User dari `accountLabel`
+- Cache: `cachedTokens` (aggregate) + `cacheWriteTokens` (breakdown Read/Write)
+  - Fix 1: convention discriminator (`readUsage` di oaistream) — fold remove-style ke 0penAI-style biar `inputTokens` konsisten inklusif cache
+- TTFT: capture wall-clock dari fetch resolve → first content/reasoning delta
+- Reasoning tokens: split dari completion (`reasoning_tokens` di raw usage)
+- USD dollar cost: [src/lib/pricing.ts](src/lib/pricing.ts) retail pricing table (25+ model), pattern fallback (`claude-*`, `gpt-*`, dst). Compute cost sesuai tier (input/cached/cache_creation/reasoning/output)
+- Drawer: 8-kotak stat grid (In · Cache Read · Cache Write · Out · Reasoning · TTFT · Latency · Credit · USD)
+
+### Provider cards (Accounts page)
+- Tombol Retry per-card (refresh credit semua akun 1 provider)
+- Tombol Warmup per-card (`warmAll` scope provider itu)
+- Kolom `#` diganti row number 1-N (bukan DB id) — biar nggak lompat setelah delete. DB id tetap di tooltip.
+- Delete pakai `<Dialog>` (bukan `confirm()` native yang di-block di preview browser)
+
+### Migration files added
+- 0006 content_filters
+- 0007 content_filters.provider_scope
+- 0008 request_logs.cached_tokens + ttft_ms
+- 0009 request_logs.cache_write_tokens
+- 0010 request_logs.reasoning_tokens
+- 0011 request_logs.dollar_cost
 
 ## Apa ini
 
@@ -28,7 +93,7 @@ format translation, dan token saver. **Single-user, local-first, dipakai sendiri
 ## Status saat ini — kode semua jalan (credit yang habis)
 
 - [x] Backend: Hono + Bun, port 7788, `/health`, `tsc --noEmit` clean
-- [x] **239 test pass, 0 fail** (12 test files)
+- [x] **242 test pass, 0 fail** (12 test files)
 - [x] Provider: **CodeBuddy** lengkap (gzip body, CLI headers, JWT refresh,
   classify markers, peekError JSON-envelope sniff)
 - [x] Pool: sticky/round-robin, skip tried, react → banned/exhausted
@@ -49,7 +114,7 @@ format translation, dan token saver. **Single-user, local-first, dipakai sendiri
   Requests (live feed + drawer + credit), Models (full table ala etteum),
   Chat (SSE streaming, markdown, reasoning block), Tunnel, Settings
 
-## Katalog CodeBuddy — 29 model, VERIFIED LIVE
+## Katalog CodeBuddy — 33 model, VERIFIED LIVE (29 chat + 3 image + 1 preview)
 
 Sumber: tabel resmi workbuddy.ai + **probe live per model** (effort spectrum Y/N,
 multi-run). Jangan ubah tanpa konfirmasi LO.
@@ -224,8 +289,118 @@ menandai akun `exhausted`, request berikutnya 503 tanpa fetch.
   RTK diverifikasi di **wire level** (stub fetch + inspeksi body gzip)
   sebagai gantinya — lihat bagian RTK.
 
+## Findings sesi audit auth (2026-09-15)
+
+Sesi audit jalur auth CodeBuddy dipicu pertanyaan LO: "kalau add akun cuma
+kasih refresh_token doang, jalan nggak?" — kode diverifikasi via test terisolasi,
+bukan asumsi baca. Semua ini **belum diperbaiki**, tunggu konfirmasi LO.
+
+### Bug 1: RT-only account nggak pernah exchange
+
+Kalau lo add akun cuma isi `creds.refresh_token` (tanpa `access_token`,
+`api_key`, `secret`), `refresh()` di `providers/codebuddy.ts:298-302` **tidak
+pernah** manggil upstream. Test bukti:
+
+```
+refresh dipanggil ke upstream?  TIDAK
+creds sesudah refresh:          {"refresh_token":"rt-GW"}
+Authorization yang dikirim:     "Bearer "     ← kosong
+```
+
+Alurnya:
+1. Gate pertama `if (!rt) return acc` — lolos, RT ada
+2. `bearerFor(acc)` (line 178) baca `access_token || api_key || secret` → string kosong
+3. Gate kedua `if (!jwtExpiringSoon(""))` → `jwtExpiringSoon("")` split "" → 1 part
+   (bukan 3) → di line 480 langsung `return false` ("opaque token, let it ride")
+4. `refresh()` return `acc` tanpa exchange
+5. Request dikirim dengan `Authorization: Bearer ` kosong → 401
+
+Yang bikin makin nyebelin: `classify()` (line 288) klasifikasi 401 sebagai
+`transient`, jadi akun **nggak** ditandai dead dan pool nggak rotate. User
+cuma dapat error berulang tanpa petunjuk.
+
+**Fix rencana**: satu baris di `refresh()`, sebelum gate `jwtExpiringSoon`:
+```ts
+const bearer = bearerFor(acc);
+if (bearer && !jwtExpiringSoon(bearer)) return acc;
+// kalau bearer kosong tapi RT ada → langsung exchange
+```
+Plus test `RT-only account` di `test/refresh.test.ts`. Pertimbangkan juga:
+kalau 401 datang padahal bearer kosong sejak awal, mungkin sebaiknya `dead`
+bukan `transient` — tapi ini nyentuh `classify()` yang lolos 239 test.
+
+### Bug 2: `warmup.ts` refresh tapi nggak persist creds
+
+`src/lib/warmup.ts:63-66`:
+```ts
+if (provider.refresh) {
+  const refreshed = await provider.refresh(acc);
+  if (refreshed) acc = refreshed;   // acc variabel lokal, langsung dibuang
+}
+```
+
+Bandingkan `src/proxy/index.ts:104-113` yang bener — pakai `pool.persistCreds`.
+Import di `warmup.ts` cuma `getAccount, setAccountStatus, listAccounts` —
+`updateCreds` nggak ada.
+
+Konsekuensi tergantung open-question di bawah:
+- Kalau RT lama tetap valid setelah rotasi → cuma boros satu RT per warmup
+- Kalau RT sekali pakai (revoke-on-use di Keycloak realm) → akun bisa mati:
+  warmup exchange sukses, tapi `RT_baru` dibuang; request berikutnya coba
+  `RT_lama` yang udah kebakar → `refresh()` return `null` → akun **banned**
+
+`warmup.ts` belum punya test file sendiri, cuma kesentuh via `api.test.ts`.
+
+### Open question: apakah RT bisa dipakai berulang?
+
+Tipe token lo `typ: "Offline"` dari Keycloak (`iss` = `workbuddy.ai/auth/realms/copilot`),
+exp = 1 tahun. Offline token secara desain memang reusable — tapi realm bisa
+di-config "Revoke Refresh Token" untuk paksa sekali pakai. Config realm nggak
+kelihatan dari sini.
+
+Bukti circumstantial pro-reusable:
+- `9router/daily_reward.py` — "1 conversation CLI **per refresh token**",
+  baca daftar RT dari file, jalan paralel 5 worker, auto-retry manggil refresh
+  **pakai RT yang sama**. Kalau sekali pakai, logika retry itu rusak by design.
+- Dua codebase (kita + 9router) fallback ke RT lama kalau upstream nggak
+  ngasih baru: `refresh_token: data.data?.refreshToken?.trim() || rt`
+- Kredensial `cb-global-1` sekarang **belum pernah** kena jalur refresh
+  (access token masih 351 hari lagi, iat = kemarin), jadi RT-nya utuh virgin
+
+Bukti kontra:
+- Komentar kode kita sendiri: *"The upstream rotates the refresh token on
+  every exchange"* (line 296). Konsisten dengan bukti pro (upstream memang
+  ngasih baru), tapi nggak menjawab apakah lama dimatikan.
+
+**Cara nge-tes aman** (belum dijalanin, tunggu konfirmasi LO):
+Script standalone yang **selalu tulis balik pasangan terbaru ke DB** sebelum
+apa-apa lagi. Panggil refresh pakai RT lama → simpan → panggil lagi pakai RT
+lama yang sama → cek response. Kalau kedua diterima = reusable. Kalau ditolak
+= sekali pakai. Dua-duanya menjawab tanpa risiko rusakin akun. Endpoint
+`/v2/plugin/auth/token/refresh` adalah auth, **bukan** inference → nggak
+lewat meter Tencent, jadi credit-exhausted nggak menghalangi test ini.
+
+### Catatan tambahan
+
+- **Kredensial `cb-global-1` sehat, cuma credit habis**: access_token dan
+  refresh_token exp = 2027-09-02 (351 hari), iat = 2026-09-14. `sub` &
+  `sid` di dua-duanya identik → jangan taruh RT yang sama sebagai akun
+  kedua di pool — di mata upstream itu satu identitas, kuota tetap 100/bulan,
+  dan kalau ternyata RT sekali pakai dua akun bisa saling makan.
+- **Status DB sekarang `active`** (bukan `exhausted` seperti dicatat sesi
+  sebelumnya) — kemungkinan sempat di-reset manual via API. Tapi saldo 0,
+  jadi request pertama ke inference tetap bakal kena 429 → balik `exhausted`.
+
 ## Belum ada / next (tanyakan dulu sebelum gas)
 
+**Urgent (hasil audit sesi ini):**
+- [ ] **Tes aman RT-reusable** — script yang selalu persist ke DB sebelum
+      call ulang; nggak butuh credit, nggak butuh ubah kode. Hasilnya nentuin
+      prioritas dua item di bawah.
+- [ ] **Fix Bug 1** — gate di `refresh()` biar RT-only account beneran exchange
+- [ ] **Fix Bug 2** — `warmup.ts` persist creds hasil refresh + test khusus
+
+**Non-urgent (dari sesi sebelumnya):**
 - [ ] Provider tambahan selain CodeBuddy
 - [ ] Dashboard: toggle RTK + statistik penghematan
 - [ ] Dashboard belum punya indikator traffic Anthropic vs OpenAI
@@ -240,12 +415,12 @@ menandai akun `exhausted`, request berikutnya 503 tanpa fetch.
   (provider.go interface, pool.go, proxy.go peekJSONError, warmup)
 - **etteum-pool**: clone di `/tmp/etteum-study/` (dashboard React+Vite+Tailwind
   ala referensi UI: provider cards, drill-down, TokenUsage, Models table)
-- **MCP** (dua-duanya sinkron di commit `ca87835`):
-  - `codebase-memory` → project `gacor-router`, 1167 nodes / 2527 edges.
+- **MCP** (dua-duanya sinkron di commit `bc7dd5b` per akhir sesi ini):
+  - `codebase-memory` → project `gacor-router`, ~1168 nodes / ~2528 edges.
     Re-index: `index_repository(repo_path, name="gacor-router", mode="moderate")`
     — **WAJIB kasih `name`**, kalau nggak dia bikin project baru dari path
     (`Users-rivanalbaniray-Documents-...`) dan jadi duplikat.
-  - `enowx-rag` → project `gacor-router`, ~450 chunk. Re-index incremental:
+  - `enowx-rag` → project `gacor-router`, ~423 chunk. Re-index incremental:
     `rag_index_project(project_id="gacor-router", directory=<repo>)`.
 - **/tmp itu fana**: `/tmp/enowx-study/` + `/tmp/etteum-study/` bisa kehapus
   pas reboot. Extract ulang dari zip kalau perlu.
