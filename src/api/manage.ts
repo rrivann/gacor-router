@@ -45,6 +45,14 @@ import {
   updateContentFilter,
 } from "../db/filters";
 import { invalidateFilters } from "../lib/filters";
+import {
+  createApiKey,
+  deleteApiKey,
+  getApiKey,
+  listApiKeys,
+  updateApiKey,
+} from "../db/apiKeys";
+import { generateApiKeySecret, invalidateApiKeyCache } from "../lib/apiKeyAuth";
 
 export const manage = new Hono();
 
@@ -466,6 +474,134 @@ manage.delete("/filters/:id", (c) => {
   const id = Number(c.req.param("id"));
   if (!deleteContentFilter(id)) return errorResponse(404, "invalid_request_error", `filter #${id} not found`);
   invalidateFilters();
+  return c.json({ ok: true });
+});
+
+// ── API keys ─────────────────────────────────────────────────────
+// CRUD for the client-facing tokens that /v1/* checks against. Secrets are
+// stored plaintext (single-user local install), so list/get return them as-is
+// for the dashboard's Eye toggle.
+
+// Normalize a JSON scope array from the wire: null / [] → null, else a
+// deduped list of non-empty strings. Rejects anything else with a message.
+function normalizeStringArrayScope(input: unknown, field: string):
+  | { ok: true; value: string[] | null }
+  | { ok: false; err: string } {
+  if (input === null || input === undefined) return { ok: true, value: null };
+  if (!Array.isArray(input)) return { ok: false, err: `${field} must be an array or null` };
+  const out: string[] = [];
+  for (const item of input) {
+    if (typeof item !== "string") return { ok: false, err: `${field} entries must be strings` };
+    const s = item.trim();
+    if (s.length === 0) continue;
+    if (!out.includes(s)) out.push(s);
+  }
+  return { ok: true, value: out.length === 0 ? null : out };
+}
+
+manage.get("/keys", (c) => {
+  return c.json({ data: listApiKeys() });
+});
+
+manage.post("/keys", async (c) => {
+  let body: {
+    label?: unknown;
+    tokenLimit?: unknown;
+    maxConcurrent?: unknown;
+    expiresAt?: unknown;
+    allowedModels?: unknown;
+    allowedProviders?: unknown;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  const label = typeof body.label === "string" ? body.label.trim() : "";
+  const tokenLimit = typeof body.tokenLimit === "number" && body.tokenLimit >= 0 ? Math.floor(body.tokenLimit) : 0;
+  const maxConcurrent =
+    typeof body.maxConcurrent === "number" && body.maxConcurrent >= 0 ? Math.floor(body.maxConcurrent) : 0;
+
+  let expiresAt: Date | null = null;
+  if (body.expiresAt != null) {
+    const t = typeof body.expiresAt === "number" ? body.expiresAt : Date.parse(String(body.expiresAt));
+    if (Number.isFinite(t)) expiresAt = new Date(t);
+    else return errorResponse(400, "invalid_request_error", "expiresAt must be a unix ms or ISO date", "expiresAt");
+  }
+
+  const models = normalizeStringArrayScope(body.allowedModels, "allowedModels");
+  if (!models.ok) return errorResponse(400, "invalid_request_error", models.err, "allowedModels");
+  const providers = normalizeStringArrayScope(body.allowedProviders, "allowedProviders");
+  if (!providers.ok) return errorResponse(400, "invalid_request_error", providers.err, "allowedProviders");
+
+  const secret = generateApiKeySecret();
+  const id = createApiKey({
+    label,
+    secret,
+    tokenLimit,
+    maxConcurrent,
+    expiresAt,
+    allowedModels: models.value,
+    allowedProviders: providers.value,
+  });
+  invalidateApiKeyCache();
+  return c.json({ id, secret });
+});
+
+manage.patch("/keys/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!getApiKey(id)) return errorResponse(404, "invalid_request_error", `key #${id} not found`);
+
+  let body: {
+    label?: unknown;
+    enabled?: unknown;
+    tokenLimit?: unknown;
+    maxConcurrent?: unknown;
+    expiresAt?: unknown;
+    allowedModels?: unknown;
+    allowedProviders?: unknown;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+
+  const patch: Parameters<typeof updateApiKey>[1] = {};
+  if (typeof body.label === "string") patch.label = body.label.trim();
+  if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+  if (typeof body.tokenLimit === "number" && body.tokenLimit >= 0) patch.tokenLimit = Math.floor(body.tokenLimit);
+  if (typeof body.maxConcurrent === "number" && body.maxConcurrent >= 0)
+    patch.maxConcurrent = Math.floor(body.maxConcurrent);
+  if ("expiresAt" in body) {
+    if (body.expiresAt === null) patch.expiresAt = null;
+    else {
+      const t = typeof body.expiresAt === "number" ? body.expiresAt : Date.parse(String(body.expiresAt));
+      if (!Number.isFinite(t))
+        return errorResponse(400, "invalid_request_error", "expiresAt must be a unix ms or ISO date", "expiresAt");
+      patch.expiresAt = new Date(t);
+    }
+  }
+  if ("allowedModels" in body) {
+    const s = normalizeStringArrayScope(body.allowedModels, "allowedModels");
+    if (!s.ok) return errorResponse(400, "invalid_request_error", s.err, "allowedModels");
+    patch.allowedModels = s.value;
+  }
+  if ("allowedProviders" in body) {
+    const s = normalizeStringArrayScope(body.allowedProviders, "allowedProviders");
+    if (!s.ok) return errorResponse(400, "invalid_request_error", s.err, "allowedProviders");
+    patch.allowedProviders = s.value;
+  }
+
+  const ok = updateApiKey(id, patch);
+  invalidateApiKeyCache();
+  return c.json({ ok });
+});
+
+manage.delete("/keys/:id", (c) => {
+  const id = Number(c.req.param("id"));
+  if (!deleteApiKey(id)) return errorResponse(404, "invalid_request_error", `key #${id} not found`);
+  invalidateApiKeyCache();
   return c.json({ ok: true });
 });
 

@@ -21,9 +21,20 @@ import { loggingTap } from "../lib/logging";
 import { compressMessages, formatRtkLog } from "../rtk";
 import { applyFilters } from "../lib/filters";
 import { getSetting } from "../db/accounts";
+import { apiKeyAuth, enforceKeyScope } from "../lib/apiKeyAuth";
+import type { ApiKeyRow } from "../db/apiKeys";
 import type { ChatRequest, ImageRequest, Provider } from "../providers/types";
 
-export const api = new Hono();
+// `apiKey` is set by the middleware when a request presents a valid key; it's
+// consumed by the handlers below for scope enforcement and by the logging tap
+// to charge the key's token quota.
+type ApiVars = { apiKey?: ApiKeyRow };
+export const api = new Hono<{ Variables: ApiVars }>();
+
+// Gate every /v1/* route with the API-key middleware. It's a no-op in the
+// two safe-by-default cases (no keys configured, or loopback request); the
+// moment either changes, clients need a real key.
+api.use("/v1/*", apiKeyAuth);
 
 interface Resolved {
   provider: Provider;
@@ -110,7 +121,13 @@ function tokenSaverEnabled(c: { req: { header: (n: string) => string | undefined
 // Runs the proxy loop for an already-converted request. The caller decides how
 // the resulting stream is rendered, which is the only thing the two wire
 // formats disagree on by this point.
-function run(r: Resolved, req: ChatRequest, signal: AbortSignal, saver: boolean) {
+function run(
+  r: Resolved,
+  req: ChatRequest,
+  signal: AbortSignal,
+  saver: boolean,
+  apiKey: ApiKeyRow | undefined
+) {
   // Filters run first so RTK (and the provider builder) see the rewritten text.
   // Mutates req.messages in place, same contract as compressMessages.
   const filterStats = applyFilters(req.messages, r.providerName);
@@ -122,7 +139,7 @@ function run(r: Resolved, req: ChatRequest, signal: AbortSignal, saver: boolean)
 
   return proxyChat(r.provider, pool, req, {
     signal,
-    tap: loggingTap({ providerName: r.providerName, model: r.model, req, raw: r.body }),
+    tap: loggingTap({ providerName: r.providerName, model: r.model, req, raw: r.body, apiKey }),
   });
 }
 
@@ -130,9 +147,13 @@ api.post("/v1/chat/completions", async (c) => {
   const r = await readBody(c);
   if (r instanceof Response) return r;
 
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const scoped = enforceKeyScope(key, r.providerName, r.model);
+  if (scoped) return scoped;
+
   const req = toCanonical(r.body as unknown as OpenAIBody, r.model);
   try {
-    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c));
+    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c), key);
     return req.stream ? toSSE(stream, r.model) : await toCompletion(stream, r.model);
   } catch (e) {
     return upstreamFailure(e);
@@ -145,9 +166,13 @@ api.post("/v1/messages", async (c) => {
   const r = await readBody(c);
   if (r instanceof Response) return r;
 
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const scoped = enforceKeyScope(key, r.providerName, r.model);
+  if (scoped) return scoped;
+
   const req = toCanonicalFromAnthropic(r.body as unknown as AnthropicBody, r.model);
   try {
-    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c));
+    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c), key);
     return req.stream ? toAnthropicSSE(stream, r.model) : await toAnthropicMessage(stream, r.model);
   } catch (e) {
     return upstreamFailure(e);
@@ -188,6 +213,10 @@ api.post("/v1/images/generations", async (c) => {
       `provider "${route.provider}" does not support image generation`
     );
   }
+
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const scoped = enforceKeyScope(key, route.provider, route.model);
+  if (scoped) return scoped;
 
   const req: ImageRequest = {
     model: route.model,

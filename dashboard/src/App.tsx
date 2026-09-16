@@ -8,6 +8,7 @@ import Models from "./pages/Models";
 import Settings from "./pages/Settings";
 import Tunnel from "./pages/Tunnel";
 import Filters from "./pages/Filters";
+import ApiKeys from "./pages/ApiKeys";
 
 // Chat pulls in react-syntax-highlighter (~280KB gzip) — lazy-load it so the
 // main bundle stays lean and the highlighter only downloads on /chat.
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="requests" element={<Requests />} />
         <Route path="models" element={<Models />} />
         <Route path="filters" element={<Filters />} />
+        <Route path="api-keys" element={<ApiKeys />} />
         <Route path="tunnel" element={<Tunnel />} />
         <Route path="settings" element={<Settings />} />
       </Route>

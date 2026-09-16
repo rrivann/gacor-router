@@ -9,6 +9,7 @@ import type { ChatRequest, StreamEvent } from "../providers/types";
 import type { Attempt, NoAccountError, TapResult, UpstreamError } from "../proxy";
 import { insertRequestLog } from "../db/logs";
 import { computeDollarCost } from "./pricing";
+import { addApiKeyUsage, type ApiKeyRow } from "../db/apiKeys";
 import { emit, EV_REQUEST_LOG } from "./events";
 
 // Bodies are stored for the detail drawer, but a runaway upstream shouldn't
@@ -25,6 +26,9 @@ export interface LogContext {
   model: string;
   req: ChatRequest;
   raw: unknown;
+  // Set when the request was authorized by an API key. On success, its
+  // tokens_used counter is incremented by total_tokens.
+  apiKey?: ApiKeyRow;
 }
 
 export function loggingTap(ctx: LogContext) {
@@ -58,6 +62,15 @@ export function loggingTap(ctx: LogContext) {
         requestBody: cap(safeStringify(ctx.raw), BODY_CAP),
         ...outcome,
       });
+      // Charge the API key's token quota only on a successful upstream turn;
+      // partial writes / rotations shouldn't drain user credit for failures
+      // that the router papered over. total_tokens is
+      // (prompt + completion) — cache reads/writes are the upstream's book.
+      if (ctx.apiKey && outcome.status === "success") {
+        const prompt = outcome.promptTokens ?? 0;
+        const completion = outcome.completionTokens ?? 0;
+        addApiKeyUsage(ctx.apiKey.id, prompt + completion);
+      }
       emit(EV_REQUEST_LOG, {
         id,
         provider: ctx.providerName,

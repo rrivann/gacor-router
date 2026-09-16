@@ -85,6 +85,20 @@
       "when": 1789491265337,
       "tag": "0011_clammy_crystal",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789533549796,
+      "tag": "0012_mixed_valkyrie",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1789533562468,
+      "tag": "0013_closed_gabe_jones",
+      "breakpoints": true
     }
   ]
 }

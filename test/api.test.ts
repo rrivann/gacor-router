@@ -61,6 +61,21 @@ new Database(dbPath).exec(`
     provider_scope text,
     created_at integer not null
   );
+  CREATE TABLE api_keys (
+    id integer primary key autoincrement,
+    label text not null default '',
+    secret text not null,
+    enabled integer not null default 1,
+    token_limit integer not null default 0,
+    tokens_used integer not null default 0,
+    max_concurrent integer not null default 0,
+    expires_at integer,
+    last_used_at integer,
+    allowed_models text,
+    allowed_providers text,
+    created_at integer not null
+  );
+  CREATE UNIQUE INDEX idx_api_keys_secret ON api_keys (secret);
   INSERT INTO accounts (provider,label,secret,status,created_at)
     VALUES ('codebuddy','acc-1','token-1','active',0);
 `);
@@ -70,6 +85,9 @@ const { manage } = await import("../src/api/manage");
 const { setSetting } = await import("../src/db/accounts");
 const { onEvent } = await import("../src/lib/events");
 const { setSpawnerForTests } = await import("../src/tunnel/manager");
+// The bun-sqlite singleton — whichever test file loaded first binds it. Use
+// it for direct schema pokes so writes hit the DB the app actually reads.
+const { sqlite: liveDb } = await import("../src/db/index");
 
 const realFetch = globalThis.fetch;
 let stub: (input: Request) => Response = () => new Response("unstubbed", { status: 500 });
@@ -203,7 +221,7 @@ test("the ban is persisted, so the next request never reaches the upstream", asy
 
 test("default_provider lets a bare model id route", async () => {
   // Reactivate the account banned above.
-  new Database(dbPath).exec(`UPDATE accounts SET status='active' WHERE id=1`);
+  liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
   setSetting("default_provider", "codebuddy");
   stub = () => new Response(OK_SSE, { status: 200 });
   const r = await chat({ model: "claude-opus-5", messages: msgs });
@@ -305,7 +323,7 @@ test("/v1/messages requests are logged like any other proxied request", async ()
 // with a module cache, so everything touching src/db must live here.
 
 function logRows(): Record<string, unknown>[] {
-  return new Database(dbPath)
+  return liveDb
     .query("SELECT * FROM request_logs ORDER BY id")
     .all() as Record<string, unknown>[];
 }
@@ -449,7 +467,7 @@ test("a dead upstream persists an error row with the attempt log", async () => {
   expect(row.error_message).toContain("failed");
   expect(row.response_body).toContain("11140");
 
-  new Database(dbPath).exec(`UPDATE accounts SET status='active' WHERE id=1`);
+  liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
 });
 
 test("an upstream 500 persists an error row with httpStatus", async () => {
@@ -866,7 +884,7 @@ test("a quota probe marks the account exhausted", async () => {
   expect((await r2.json()).status).toBe("active");
 });
 
-test("a dead-marker probe bans the account and a good probe does NOT re-arm it", async () => {
+test("a dead-marker probe bans the account and a good probe re-arms it", async () => {
   stub = () => new Response(`{"code":11140,"msg":"request illegal"}`, { status: 200 });
   const r = await manage.request("/accounts/1/warmup", { method: "POST" });
   expect((await r.json()).status).toBe("banned");
@@ -875,9 +893,9 @@ test("a dead-marker probe bans the account and a good probe does NOT re-arm it",
   const r2 = await manage.request("/accounts/1/warmup", { method: "POST" });
   const body2 = await r2.json();
   expect(body2.ok).toBe(true);
-  expect(body2.status).toBe("banned"); // banned needs explicit reactivation
+  expect(body2.status).toBe("active"); // a live probe proves the credential works
 
-  new Database(dbPath).exec(`UPDATE accounts SET status='active' WHERE id=1`);
+  liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
 });
 
 test("warmup-all probes the provider's accounts and reports per-account results", async () => {
@@ -980,9 +998,8 @@ test("concurrency is clamped to 16 and nonsense values fall back to defaults", a
 test("GET /api/stats/usage buckets by range and filters old rows out of 1d", async () => {
   // Seed an old row (~3 days back) + rely on the fresh rows from earlier tests.
   // created_at is unix seconds (drizzle timestamp mode).
-  const sqlite = new Database(dbPath);
   const old = Math.floor(Date.now() / 1000) - 3 * 24 * 3600;
-  sqlite.exec(`
+  liveDb.exec(`
     INSERT INTO request_logs (created_at, provider, model, account_id, account_label, stream, source, status,
       prompt_tokens, completion_tokens, total_tokens)
     VALUES (${old}, 'codebuddy', 'old-model', 1, 'acc-1', 0, 'proxy', 'success', 1000, 500, 1500)

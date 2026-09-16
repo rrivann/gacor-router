@@ -118,12 +118,11 @@ export async function warmAccount(
     setAccountStatus(acc.id, "exhausted");
     status = "exhausted";
   } else if (outcome === "ok" && row.status !== "active") {
-    // A good probe re-arms an exhausted account; banned stays banned (needs
-    // explicit reactivation) — matching how the pool treats them.
-    if (row.status === "exhausted") {
-      setAccountStatus(acc.id, "active");
-      status = "active";
-    }
+    // A good probe is direct proof the credential works — re-arm both
+    // exhausted and banned accounts. This is also the recovery path when a
+    // ban was misclassified (e.g. a stale snapshot or a past bug).
+    setAccountStatus(acc.id, "active");
+    status = "active";
   }
 
   const result: WarmResult = {

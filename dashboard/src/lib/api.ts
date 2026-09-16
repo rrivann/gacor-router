@@ -329,6 +329,47 @@ export const updateFilter = (
 export const deleteFilter = (id: number) =>
   fetchApi<{ ok: boolean }>(`/api/filters/${id}`, { method: "DELETE" });
 
+// ── API keys ─────────────────────────────────────────────────────
+
+export interface ApiKey {
+  id: number;
+  label: string;
+  secret: string;
+  enabled: boolean;
+  tokenLimit: number;
+  tokensUsed: number;
+  maxConcurrent: number;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  allowedModels: string[] | null;
+  allowedProviders: string[] | null;
+  createdAt: string;
+}
+
+export const fetchApiKeys = () => fetchApi<{ data: ApiKey[] }>("/api/keys");
+
+export const createApiKey = (row: {
+  label?: string;
+  tokenLimit?: number;
+  maxConcurrent?: number;
+  expiresAt?: string | number | null;
+  allowedModels?: string[] | null;
+  allowedProviders?: string[] | null;
+}) => fetchApi<{ id: number; secret: string }>("/api/keys", { method: "POST", body: JSON.stringify(row) });
+
+export const updateApiKey = (
+  id: number,
+  patch: Partial<
+    Pick<
+      ApiKey,
+      "label" | "enabled" | "tokenLimit" | "maxConcurrent" | "expiresAt" | "allowedModels" | "allowedProviders"
+    >
+  >
+) => fetchApi<{ ok: boolean }>(`/api/keys/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+
+export const deleteApiKey = (id: number) =>
+  fetchApi<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" });
+
 // ── Process debug ────────────────────────────────────────────────
 
 export interface DebugProcess {

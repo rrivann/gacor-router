@@ -3,7 +3,7 @@
 // - snake_case column names, camelCase TS fields
 // - timestamps as integer unix ms via mode: "timestamp"
 
-import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Upstream accounts (one row per credential). `secret` is the single-token
 // case; `creds` (JSON) carries multi-field sets like {access_token, refresh_token, region}.
@@ -72,6 +72,38 @@ export const contentFilters = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   (t) => [index("idx_content_filters_sort").on(t.sort)]
+);
+
+// Client-facing API keys — the token a client (Code Assistant, Cursor, curl…) sends
+// in `Authorization: Bearer …` to authenticate to /v1/*. Stored plaintext so
+// the dashboard can reveal for copy; the file is local and single-user. Scope
+// columns restrict which models/providers a key may address; null = allow all.
+export const apiKeys = sqliteTable(
+  "api_keys",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    label: text("label").notNull().default(""),
+    secret: text("secret").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    // Cumulative token cap; 0 = unlimited. Counted against total_tokens per
+    // successful request.
+    tokenLimit: integer("token_limit").notNull().default(0),
+    tokensUsed: integer("tokens_used").notNull().default(0),
+    // Max in-flight requests for this key; 0 = unlimited.
+    maxConcurrent: integer("max_concurrent").notNull().default(0),
+    // null = never expires. Compared against Date.now() at auth time.
+    expiresAt: integer("expires_at", { mode: "timestamp" }),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+    // Model scope: null = all, non-empty array = only these model IDs (matched
+    // against the resolved provider/model or the tail).
+    allowedModels: text("allowed_models", { mode: "json" }).$type<string[] | null>(),
+    // Provider scope: null = all, non-empty array = only these providers.
+    allowedProviders: text("allowed_providers", { mode: "json" }).$type<string[] | null>(),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [uniqueIndex("idx_api_keys_secret").on(t.secret)]
 );
 
 // One row per completed (or failed) proxied request. The list endpoint omits
