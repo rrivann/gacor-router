@@ -248,6 +248,15 @@ export default function Requests() {
                   {selected.source === "warmup" && (
                     <Badge variant="secondary" className="ml-1 align-middle">warmup</Badge>
                   )}
+                  {selected.source === "video" && (
+                    <Badge variant="secondary" className="ml-1 align-middle">video</Badge>
+                  )}
+                  <Badge
+                    variant={selected.stream ? "info" : "secondary"}
+                    className="ml-1 align-middle"
+                  >
+                    {selected.stream ? "stream" : "json"}
+                  </Badge>
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {formatDateTime(selected.createdAt)} · {selected.provider}/{selected.model} ·{" "}
