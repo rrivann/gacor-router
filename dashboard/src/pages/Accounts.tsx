@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Eye, EyeOff, Plus, RefreshCw, Search, Trash2, Copy, Check, ArrowLeft, Flame, Loader2 } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -37,7 +38,19 @@ export default function Accounts() {
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [providerFilter, setProviderFilter] = useState("all");
+  // Drill-down state lives in the URL (?provider=codebuddy) so clicking the
+  // sidebar "Accounts" link — which navigates to bare /accounts without a
+  // query — resets us to the landing view instead of getting stuck in a
+  // drill-down. Also makes the drill-down URL shareable/bookmarkable.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const providerFilter = searchParams.get("provider") ?? "all";
+  const setProviderFilter = useCallback((p: string) => {
+    if (p === "all") {
+      setSearchParams({}, { replace: true });
+    } else {
+      setSearchParams({ provider: p }, { replace: true });
+    }
+  }, [setSearchParams]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [rotation, setRotation] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
