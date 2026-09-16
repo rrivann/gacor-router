@@ -147,9 +147,32 @@ if [ -n "$PORT_OVERRIDE" ]; then
 fi
 
 # ── Install deps + apply migrations ────────────────────────────────
+# Some VPS providers (notably Tencent Cloud) preconfigure a private npm
+# mirror (mirrors.tencentyun.com) via /etc/npmrc or a global bunfig that
+# returns 404 for packages like drizzle-kit. Try the default registry first;
+# on failure, retry once against the npmmirror.com public China mirror
+# which serves the full npm catalogue.
+run_bun_install() {
+  local registry_flag="$1"
+  if [ -n "$registry_flag" ]; then
+    (cd "$PREFIX" && BUN_CONFIG_REGISTRY="$registry_flag" bun install --production)
+  else
+    (cd "$PREFIX" && bun install --production)
+  fi
+}
+
 info "installing dependencies (this can take a minute)…"
-(cd "$PREFIX" && bun install --production)
-ok "dependencies installed"
+if ! run_bun_install ""; then
+  warn "default registry failed — retrying with https://registry.npmmirror.com"
+  # Nuke any partial install so bun re-resolves cleanly against the new registry.
+  rm -rf "$PREFIX/node_modules" "$PREFIX/bun.lock" 2>/dev/null || true
+  if ! run_bun_install "https://registry.npmmirror.com"; then
+    die "dependency install failed against both registries — check network + npm proxy config"
+  fi
+  ok "dependencies installed (via npmmirror.com fallback)"
+else
+  ok "dependencies installed"
+fi
 
 info "applying database migrations…"
 (cd "$PREFIX" && bun run db:migrate)
