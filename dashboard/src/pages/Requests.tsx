@@ -172,8 +172,9 @@ export default function Requests() {
                     {formatDateTime(l.createdAt)}
                   </td>
                   <td className="px-4 py-2.5 text-secondary-foreground">{l.accountLabel ?? "—"}</td>
-                  <td className="max-w-[240px] truncate px-4 py-2.5 font-medium">
-                    {l.model ?? "?"}
+                  <td className="max-w-[240px] px-4 py-2.5">
+                    <div className="truncate font-medium">{l.model ?? "?"}</div>
+                    <div className="text-[10px] text-muted-foreground">{l.provider}</div>
                   </td>
                   <td className="px-4 py-2.5">
                     <Badge variant={statusVariant(l.status, l.httpStatus)}>
