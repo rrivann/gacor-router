@@ -293,4 +293,12 @@ export const codebuddyModels: ModelInfo[] = [
   { id: "gpt-image-2", name: "GPT Image 2", ownedBy: "openai", kind: "image" },
   { id: "gemini-2.5-flash-image", name: "Gemini 2.5 Flash Image", ownedBy: "google", kind: "image" },
   { id: "gemini-3.1-flash-image", name: "Gemini 3.1 Flash Image", ownedBy: "google", kind: "image" },
+
+  // ── Video generation (kind: "video") ──────────────────────────
+  // Live-probed 2026-09-16: POST /v2/videos/generations + poll
+  // /v2/videos/tasks returns a signed COS mp4 URL after ~3-4 minutes.
+  // Constraint: seconds ∈ [4, 30]. Cost ≈ 21 credits/second at 720P (a 4-s
+  // clip runs 83.72 credits in practice). Only model that actually renders
+  // — hunyuan-video-art, seedance-2, seedance are all 400 route-not-found.
+  { id: "seedance-2.5", name: "Seedance 2.5", ownedBy: "bytedance", kind: "video" },
 ];

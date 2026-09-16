@@ -9,6 +9,7 @@ import { api } from "./api";
 import { manage } from "./api/manage";
 import { onEvent } from "./lib/events";
 import { startAutoWarmScheduler } from "./lib/autowarm";
+import { startVideoPoller } from "./lib/videoPoller";
 
 const app = new Hono();
 
@@ -91,3 +92,7 @@ console.log(`gacor-router listening on http://${env.host}:${server.port}`);
 // Background auto-warmup: warms accounts whose provider enables it (config in
 // settings, re-read every minute). Unref'd — never blocks shutdown.
 startAutoWarmScheduler();
+
+// Background video poller: drives every queued/in_progress video_jobs row to
+// a terminal state (downloads the mp4 to ./videos on completion). Unref'd.
+startVideoPoller();

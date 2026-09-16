@@ -12,6 +12,8 @@ import type {
   Outcome,
   Provider,
   StreamEvent,
+  VideoRequest,
+  VideoSubmitResult,
 } from "../providers/types";
 import { peekError } from "../providers/peek";
 import type { Pool } from "../pool/pool";
@@ -204,6 +206,70 @@ export async function proxyImage(
         // parse() only throws on structural failures (non-zero code, malformed
         // JSON). Treat as transient: retry might land on a different upstream
         // instance, but banning would over-react.
+        const msg = err instanceof Error ? err.message : String(err);
+        attempts.push({ account, status: resp.status, outcome: "transient", body: msg });
+        throw new UpstreamError(resp.status, msg, "transient", attempts);
+      }
+    }
+
+    const body = await resp.text();
+    const outcome = provider.classify(resp.status, body);
+    attempts.push({ account, status: resp.status, outcome, body });
+    pool.react(account.id, outcome);
+    if (outcome === "dead" || outcome === "exhausted") continue;
+    throw new UpstreamError(resp.status, body, outcome, attempts);
+  }
+
+  throw new NoAccountError(name, attempts);
+}
+
+export interface VideoProxyResult {
+  submit: VideoSubmitResult;
+  account: Account;
+  attempts: Attempt[];
+}
+
+// Video-submit variant. Same rotation rules as image, but the return value is
+// a task id — the render itself finishes later, driven by the background
+// poller (src/lib/videoPoller.ts) that owns the /v2/videos/tasks polling and
+// mp4 download. Nothing in this loop waits on the render.
+export async function proxyVideo(
+  provider: Provider,
+  pool: Pool,
+  req: VideoRequest,
+  opts: { signal?: AbortSignal; maxAttempts?: number } = {}
+): Promise<VideoProxyResult> {
+  if (!provider.video) {
+    throw new UpstreamError(501, `provider "${provider.name()}" does not support video generation`, "dead", []);
+  }
+  const name = provider.name();
+  const tried = new Set<number>();
+  const attempts: Attempt[] = [];
+  const maxAttempts = opts.maxAttempts ?? 5;
+
+  while (attempts.length < maxAttempts) {
+    let account = pool.pick(name, tried);
+    if (!account) break;
+    tried.add(account.id);
+
+    if (provider.refresh) {
+      const before = account.creds;
+      const refreshed = await provider.refresh(account);
+      if (!refreshed) {
+        attempts.push({ account, status: 0, outcome: "dead", body: "credential refresh failed" });
+        pool.react(account.id, "dead");
+        continue;
+      }
+      if (refreshed.creds !== before) pool.persistCreds(account.id, refreshed.creds);
+      account = refreshed;
+    }
+
+    const { resp, parse } = await provider.video(req, account);
+    if (resp.ok) {
+      try {
+        const submit = await parse();
+        return { submit, account, attempts };
+      } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         attempts.push({ account, status: resp.status, outcome: "transient", body: msg });
         throw new UpstreamError(resp.status, msg, "transient", attempts);

@@ -115,7 +115,7 @@ export interface ModelInfo {
   effort: string | null;
   images: boolean;
   tool_calls: boolean;
-  kind: "chat" | "image";
+  kind: "chat" | "image" | "video";
 }
 
 export interface RequestLogEvent {
@@ -388,3 +388,89 @@ export interface DebugProcess {
 }
 
 export const fetchDebugProcess = () => fetchApi<DebugProcess>("/api/debug/process");
+
+// ── Video jobs ───────────────────────────────────────────────────
+
+export interface VideoJobParams {
+  prompt: string;
+  seconds: number;
+  resolution: "720P" | "1080P";
+  aspectRatio: "16:9" | "9:16" | "1:1";
+  audio: boolean;
+  negativePrompt: string;
+  watermark: boolean;
+}
+
+export interface VideoJobRow {
+  id: number;
+  provider: string;
+  model: string;
+  accountId: number;
+  accountLabel: string | null;
+  apiKeyId: number | null;
+  taskId: string;
+  status: string;
+  params: VideoJobParams;
+  filePath: string | null;
+  fileSize: number | null;
+  videoUrl: string | null;
+  creditUsed: number | null;
+  dollarCost: number | null;
+  errorMessage: string | null;
+  requestLogId: number | null;
+  createdAt: string;
+  updatedAt: string | null;
+  completedAt: string | null;
+}
+
+// WS event payload — a subset of the row, published on every lifecycle
+// transition (queued → in_progress → completed | failed).
+export interface VideoStatusEvent {
+  id: number;
+  status: string;
+  taskId: string;
+  provider: string;
+  model: string;
+  accountId: number;
+  accountLabel: string | null;
+  filePath: string | null;
+  fileSize: number | null;
+  creditUsed: number | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  completedAt: string | null;
+  params: VideoJobParams;
+}
+
+export const fetchVideos = (opts?: { status?: string }) => {
+  const params = new URLSearchParams();
+  if (opts?.status) params.set("status", opts.status);
+  const qs = params.toString();
+  return fetchApi<{ data: VideoJobRow[] }>(`/api/videos${qs ? `?${qs}` : ""}`);
+};
+
+export const fetchVideoDetail = (id: number) => fetchApi<{ data: VideoJobRow }>(`/api/videos/${id}`);
+
+export const deleteVideo = (id: number) =>
+  fetchApi<{ ok: boolean }>(`/api/videos/${id}`, { method: "DELETE" });
+
+// The download URL clients follow. Same-origin, so no CORS work.
+export const videoDownloadUrl = (id: number): string => `/v1/videos/${id}/download`;
+
+// Submit a new video job through /v1/videos/generations. Kept alongside the
+// management fetchers even though it's a client-API endpoint — the dashboard
+// uses it the same way a curl user would.
+export const submitVideo = (body: {
+  model: string;
+  prompt: string;
+  seconds?: number;
+  resolution?: "720P" | "1080P";
+  aspect_ratio?: "16:9" | "9:16" | "1:1";
+  audio?: boolean;
+  negative_prompt?: string;
+  watermark?: boolean;
+}) => fetchApi<VideoJobRow & { task_id: string; file_url: string | null }>("/v1/videos/generations", {
+  method: "POST",
+  body: JSON.stringify(body),
+});

@@ -220,7 +220,8 @@ test("assistant tool calls and tool results survive the round trip", async () =>
 
 test("the model catalogue is namespaced and non-empty", () => {
   const models = p.models();
-  expect(models.length).toBe(33);
+  expect(models.length).toBe(34);
   expect(models.map((m) => m.id)).toContain("gpt-6-astra");
+  expect(models.map((m) => m.id)).toContain("seedance-2.5");
   expect(models.every((m) => m.id.length > 0)).toBe(true);
 });

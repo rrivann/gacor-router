@@ -25,7 +25,7 @@ export default function Models() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
-  const [kind, setKind] = useState<"all" | "chat" | "image">("all");
+  const [kind, setKind] = useState<"all" | "chat" | "image" | "video">("all");
   const [copied, setCopied] = useState<string | null>(null);
 
   async function load() {
@@ -51,7 +51,7 @@ export default function Models() {
   );
 
   const kindCounts = useMemo(() => {
-    const c = { all: models.length, chat: 0, image: 0 };
+    const c = { all: models.length, chat: 0, image: 0, video: 0 };
     for (const m of models) c[m.kind]++;
     return c;
   }, [models]);
@@ -146,7 +146,7 @@ export default function Models() {
         </div>
         <span className="text-xs text-muted-foreground">·</span>
         <div className="flex flex-wrap items-center gap-1.5">
-          {(["all", "chat", "image"] as const).map((k) => (
+          {(["all", "chat", "image", "video"] as const).map((k) => (
             <button
               key={k}
               onClick={() => setKind(k)}

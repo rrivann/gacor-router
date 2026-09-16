@@ -16,6 +16,9 @@ import type {
   Provider,
   StreamEvent,
   UsagePackage,
+  VideoPollResult,
+  VideoRequest,
+  VideoSubmitResult,
 } from "./types";
 import { parseResponse } from "./oaistream";
 import { codebuddyModels } from "./codebuddy.models";
@@ -230,7 +233,7 @@ export class CodeBuddyProvider implements Provider {
   }
 
   caps(): Caps {
-    return { chat: true, images: true, imageGen: true };
+    return { chat: true, images: true, imageGen: true, videoGen: true };
   }
 
   models(): ModelInfo[] {
@@ -425,6 +428,106 @@ export class CodeBuddyProvider implements Provider {
     };
   }
 
+  // Submit a video generation job via CodeBuddy's /v2/videos/generations.
+  // Async upstream: response is `{code:0, data:{id, status:"queued"}}` — the
+  // actual render finishes minutes later, and the poller drives progress.
+  //
+  // Wire shape verified live 2026-09-16 (see scripts/video-smoke.ts) and the
+  // mitm capture at re/captures_video/mitm_videogen_20260916.jsonl. The header
+  // envelope is a distinct set from chat: video routes want the CLI headers
+  // with `X-Agent-Type: main` and no gzip.
+  async video(
+    req: VideoRequest,
+    acc: Account
+  ): Promise<{ resp: Response; parse: () => Promise<VideoSubmitResult> }> {
+    const body: Record<string, unknown> = {
+      prompt: req.prompt,
+      model: req.model,
+      seconds: req.seconds,
+      negative_prompt: req.negativePrompt ?? "",
+      watermark: req.watermark ?? true,
+      extra_parameters: {
+        resolution: req.resolution ?? "720P",
+        enable_audio: req.audio ?? false,
+        aspect_ratio: req.aspectRatio ?? "16:9",
+      },
+    };
+
+    const token = bearerFor(acc);
+    const uid = jwtSub(token);
+    const doFetch = this.fetchImpl ?? globalThis.fetch;
+    const resp = await doFetch("https://www.codebuddy.ai/v2/videos/generations", {
+      method: "POST",
+      headers: buildVideoHeaders(token, uid),
+      body: JSON.stringify(body),
+    });
+
+    // Buffer the body so the proxy loop can peek it for the failure path
+    // (classify) or delegate to parse() on the ok path — same trick as image().
+    let cached: string | null = null;
+    const readText = async () => (cached ??= await resp.clone().text());
+
+    return {
+      resp,
+      parse: async (): Promise<VideoSubmitResult> => {
+        const text = await readText();
+        let outer: { code?: number; msg?: string; data?: { id?: string; status?: string } };
+        try {
+          outer = JSON.parse(text) as typeof outer;
+        } catch {
+          throw new Error(`video submit response not JSON: ${text.slice(0, 200)}`);
+        }
+        if (outer.code !== 0 || !outer.data?.id) {
+          throw new Error(`video submit failed code=${outer.code} msg=${outer.msg}`);
+        }
+        return { taskId: outer.data.id, status: outer.data.status ?? "queued" };
+      },
+    };
+  }
+
+  // Poll a submitted job via /v2/videos/tasks. Returns a normalized lifecycle
+  // status. Only `completed` carries the signed COS URL (valid ~12h).
+  async pollVideo(taskId: string, acc: Account): Promise<VideoPollResult> {
+    const token = bearerFor(acc);
+    const uid = jwtSub(token);
+    const doFetch = this.fetchImpl ?? globalThis.fetch;
+    const resp = await doFetch("https://www.codebuddy.ai/v2/videos/tasks", {
+      method: "POST",
+      headers: buildVideoHeaders(token, uid),
+      body: JSON.stringify({ task_id: taskId }),
+    });
+    const text = await resp.text();
+    let outer: {
+      code?: number;
+      msg?: string;
+      data?: {
+        status?: string;
+        data?: { url?: string; resolution?: string }[];
+        usage?: { credit?: number; output_tokens?: number };
+      };
+    };
+    try {
+      outer = JSON.parse(text) as typeof outer;
+    } catch {
+      return { status: "failed", errorMessage: `poll response not JSON: ${text.slice(0, 200)}` };
+    }
+    if (outer.code !== 0) {
+      return { status: "failed", errorMessage: `poll code=${outer.code} msg=${outer.msg}` };
+    }
+    const raw = outer.data?.status ?? "queued";
+    const status: VideoPollResult["status"] =
+      raw === "completed" || raw === "failed" || raw === "in_progress" ? raw : "queued";
+    const out: VideoPollResult = { status };
+    if (status === "completed") {
+      const first = outer.data?.data?.[0];
+      if (first?.url) out.url = first.url;
+      if (first?.resolution) out.resolution = first.resolution;
+      if (typeof outer.data?.usage?.credit === "number") out.credit = outer.data.usage.credit;
+      if (typeof outer.data?.usage?.output_tokens === "number") out.outputTokens = outer.data.usage.output_tokens;
+    }
+    return out;
+  }
+
   // Fetch the account's credit snapshot from Tencent's billing meter. The
   // response ships a bundle of packages: a monthly-refilling plan (cycle
   // capacity) plus lifetime bonus packs (plain capacity). Total = sum of
@@ -552,6 +655,50 @@ function parseCycleEnd(s: string | undefined): number {
   const [, y, mo, d, h, mi, sec] = m;
   const utc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(sec ?? 0));
   return Math.floor((utc - 8 * 3600 * 1000) / 1000); // Asia/Shanghai is UTC+8, no DST
+}
+
+// Video routes want a distinct header envelope from chat: no gzip, standard
+// JSON accept, an X-Agent-Type/X-User-Id pair matching the CLI's videoGen tool
+// (captured 2026-09-16). Reusing buildHeaders() would mislabel the traffic.
+function buildVideoHeaders(bearer: string, uid: string): Headers {
+  const conversationId = randomUUID();
+  const requestId = randomUUID().replace(/-/g, "");
+  return new Headers({
+    Accept: "application/json, text/plain, */*",
+    "Content-Type": "application/json",
+    "X-Requested-With": "XMLHttpRequest",
+    Authorization: `Bearer ${bearer}`,
+    "X-Conversation-ID": conversationId,
+    "X-Conversation-Request-ID": requestId,
+    "X-Conversation-Message-ID": requestId,
+    "X-Request-ID": requestId,
+    "X-Agent-Intent": "craft",
+    "X-Agent-Type": "main",
+    "X-Agent-Purpose": "conversation",
+    "X-Root-Request-ID": requestId,
+    "X-IDE-Type": "CLI",
+    "X-IDE-Name": "",
+    "X-IDE-Version": "0.0.0",
+    "X-User-Id": uid,
+    "X-Domain": "www.codebuddy.ai",
+    "X-Product": "SaaS",
+    "User-Agent": "CLI/2.151.0 CodeBuddy/2.151.0",
+  });
+}
+
+// Decode a JWT payload for the `sub` claim (goes into X-User-Id). Never
+// verifies — the bearer already served its own auth on the round trip.
+function jwtSub(token: string): string {
+  const parts = token.split(".");
+  if (parts.length !== 3) return "";
+  try {
+    const payload = JSON.parse(
+      Buffer.from(parts[1]!.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString()
+    ) as { sub?: string };
+    return payload.sub ?? "";
+  } catch {
+    return "";
+  }
 }
 
 // Refresh this long before the JWT actually expires — the upstream clock and

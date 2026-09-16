@@ -7,7 +7,8 @@
 import { Hono } from "hono";
 import { registry } from "../providers";
 import { pool } from "../pool";
-import { proxyChat, proxyImage, NoAccountError, UpstreamError } from "../proxy";
+import { existsSync, statSync } from "node:fs";
+import { proxyChat, proxyImage, proxyVideo, NoAccountError, UpstreamError } from "../proxy";
 import { toCanonical, toSSE, toCompletion, type OpenAIBody } from "../convert/openai";
 import {
   toAnthropicMessage,
@@ -22,8 +23,11 @@ import { compressMessages, formatRtkLog } from "../rtk";
 import { applyFilters } from "../lib/filters";
 import { getSetting } from "../db/accounts";
 import { apiKeyAuth, enforceKeyScope } from "../lib/apiKeyAuth";
+import { insertRequestLog } from "../db/logs";
+import { createVideoJob, getVideoJob } from "../db/videoJobs";
+import { emit, EV_VIDEO_STATUS } from "../lib/events";
 import type { ApiKeyRow } from "../db/apiKeys";
-import type { ChatRequest, ImageRequest, Provider } from "../providers/types";
+import type { ChatRequest, ImageRequest, Provider, VideoRequest } from "../providers/types";
 
 // `apiKey` is set by the middleware when a request presents a valid key; it's
 // consumed by the handlers below for scope enforcement and by the logging tap
@@ -261,3 +265,234 @@ api.get("/v1/models", (c) => {
   });
   return c.json({ object: "list", data });
 });
+
+// ── Video generation (async) ─────────────────────────────────────
+// POST submits a job (returns instantly), the background poller drives it to
+// completion, GET polls status, GET /download streams the mp4 from disk.
+
+const VIDEO_ALLOWED_RESOLUTIONS = new Set(["720P", "1080P"]);
+const VIDEO_ALLOWED_ASPECTS = new Set(["16:9", "9:16", "1:1"]);
+const VIDEO_MIN_SECONDS = 4;
+const VIDEO_MAX_SECONDS = 30;
+
+// POST /v1/videos/generations — submit a job. Returns the job row shape,
+// same object the GET /:id endpoint returns (minus the download convenience).
+api.post("/v1/videos/generations", async (c) => {
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  if (typeof raw !== "object" || raw === null) {
+    return errorResponse(400, "invalid_request_error", "body must be a JSON object");
+  }
+  const body = raw as Record<string, unknown>;
+
+  if (typeof body.model !== "string" || body.model.length === 0) {
+    return errorResponse(400, "invalid_request_error", "`model` must be a non-empty string", "model");
+  }
+  if (typeof body.prompt !== "string" || body.prompt.length === 0) {
+    return errorResponse(400, "invalid_request_error", "`prompt` must be a non-empty string", "prompt");
+  }
+  // Default to the minimum billable duration when unspecified. Upstream rejects
+  // anything outside [4, 30] as "unsupported video duration".
+  const seconds = typeof body.seconds === "number" ? Math.floor(body.seconds) : VIDEO_MIN_SECONDS;
+  if (seconds < VIDEO_MIN_SECONDS || seconds > VIDEO_MAX_SECONDS) {
+    return errorResponse(
+      400,
+      "invalid_request_error",
+      `\`seconds\` must be between ${VIDEO_MIN_SECONDS} and ${VIDEO_MAX_SECONDS} (upstream constraint)`,
+      "seconds"
+    );
+  }
+
+  const resolution = typeof body.resolution === "string" && VIDEO_ALLOWED_RESOLUTIONS.has(body.resolution)
+    ? (body.resolution as "720P" | "1080P")
+    : "720P";
+  const aspectRatio = typeof body.aspect_ratio === "string" && VIDEO_ALLOWED_ASPECTS.has(body.aspect_ratio)
+    ? (body.aspect_ratio as "16:9" | "9:16" | "1:1")
+    : "16:9";
+  const audio = body.audio === true;
+  const watermark = body.watermark === false ? false : true;
+  const negativePrompt = typeof body.negative_prompt === "string" ? body.negative_prompt : "";
+
+  const route = resolveModel(body.model);
+  if (!route) {
+    return errorResponse(400, "invalid_request_error", `cannot route model "${body.model}"`, "model");
+  }
+  const provider = registry.get(route.provider);
+  if (!provider) {
+    return errorResponse(501, "not_implemented_error", `provider "${route.provider}" is not implemented`);
+  }
+  if (!provider.video) {
+    return errorResponse(
+      501,
+      "not_implemented_error",
+      `provider "${route.provider}" does not support video generation`
+    );
+  }
+
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const scoped = enforceKeyScope(key, route.provider, route.model);
+  if (scoped) return scoped;
+
+  const req: VideoRequest = {
+    model: route.model,
+    prompt: body.prompt,
+    seconds,
+    resolution,
+    aspectRatio,
+    audio,
+    negativePrompt,
+    watermark,
+    raw: body,
+  };
+
+  const startedAt = Date.now();
+  try {
+    const { submit, account, attempts } = await proxyVideo(provider, pool, req, { signal: c.req.raw.signal });
+
+    // Persist a request_logs row for the submit half so it shows up in the
+    // usual Requests view. The poller writes another when the job completes.
+    const requestLogId = insertRequestLog({
+      provider: route.provider,
+      model: route.model,
+      accountId: account.id,
+      accountLabel: account.label,
+      stream: false,
+      source: "video-submit",
+      status: "success",
+      httpStatus: 200,
+      outcome: "ok",
+      durationMs: Date.now() - startedAt,
+      requestBody: JSON.stringify(body),
+      responseBody: JSON.stringify({ taskId: submit.taskId, status: submit.status }),
+    });
+
+    const jobId = createVideoJob({
+      provider: route.provider,
+      model: route.model,
+      accountId: account.id,
+      accountLabel: account.label,
+      apiKeyId: key?.id ?? null,
+      taskId: submit.taskId,
+      status: submit.status === "queued" || submit.status === "in_progress" ? submit.status : "queued",
+      params: {
+        prompt: body.prompt,
+        seconds,
+        resolution,
+        aspectRatio,
+        audio,
+        negativePrompt,
+        watermark,
+      },
+      requestLogId,
+    });
+
+    const row = getVideoJob(jobId)!;
+    emit(EV_VIDEO_STATUS, videoRowPayload(row));
+    return c.json(videoRowJson(row, c.req.url));
+  } catch (e) {
+    return upstreamFailure(e);
+  }
+});
+
+// GET /v1/videos/:id — poll status. Client-side polling companion to the
+// server-side background poller: the row is always the source of truth, this
+// just serves it.
+api.get("/v1/videos/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id) || id <= 0) {
+    return errorResponse(400, "invalid_request_error", "invalid job id");
+  }
+  const row = getVideoJob(id);
+  if (!row) return errorResponse(404, "invalid_request_error", `video job #${id} not found`);
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const scoped = enforceKeyScope(key, row.provider, row.model);
+  if (scoped) return scoped;
+  return c.json(videoRowJson(row, c.req.url));
+});
+
+// GET /v1/videos/:id/download — stream the mp4 from disk. 409 while the job
+// hasn't finished, 404 if the file is missing (deleted / never fetched).
+api.get("/v1/videos/:id/download", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id) || id <= 0) {
+    return errorResponse(400, "invalid_request_error", "invalid job id");
+  }
+  const row = getVideoJob(id);
+  if (!row) return errorResponse(404, "invalid_request_error", `video job #${id} not found`);
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const scoped = enforceKeyScope(key, row.provider, row.model);
+  if (scoped) return scoped;
+
+  if (row.status !== "completed") {
+    return errorResponse(409, "invalid_request_error", `video job #${id} is ${row.status}, not completed`);
+  }
+  if (!row.filePath || !existsSync(row.filePath) || !statSync(row.filePath).isFile()) {
+    return errorResponse(404, "invalid_request_error", `video file for job #${id} is missing from disk`);
+  }
+
+  return new Response(Bun.file(row.filePath), {
+    headers: {
+      "content-type": "video/mp4",
+      "content-disposition": `attachment; filename="video-${row.id}.mp4"`,
+      ...(row.fileSize ? { "content-length": String(row.fileSize) } : {}),
+    },
+  });
+});
+
+// JSON serializer for a video job row — accepts a request URL so the
+// download URL is same-origin (loopback for dashboard, tunnel host for
+// remote clients). The event payload is a subset of this shape.
+function videoRowJson(row: NonNullable<ReturnType<typeof getVideoJob>>, requestUrl: string): Record<string, unknown> {
+  const origin = (() => {
+    try {
+      return new URL(requestUrl).origin;
+    } catch {
+      return "";
+    }
+  })();
+  return {
+    id: row.id,
+    provider: row.provider,
+    model: row.model,
+    task_id: row.taskId,
+    status: row.status,
+    params: row.params,
+    file_url: row.status === "completed" && row.filePath ? `${origin}/v1/videos/${row.id}/download` : null,
+    file_size: row.fileSize,
+    video_url: row.videoUrl,
+    credit_used: row.creditUsed,
+    dollar_cost: row.dollarCost,
+    error_message: row.errorMessage,
+    account_id: row.accountId,
+    account_label: row.accountLabel,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+    completed_at: row.completedAt,
+  };
+}
+
+// Compact WS payload — the dashboard already has the row context from the
+// initial list load, this just carries the mutable fields.
+function videoRowPayload(row: NonNullable<ReturnType<typeof getVideoJob>>): Record<string, unknown> {
+  return {
+    id: row.id,
+    status: row.status,
+    taskId: row.taskId,
+    provider: row.provider,
+    model: row.model,
+    accountId: row.accountId,
+    accountLabel: row.accountLabel,
+    filePath: row.filePath,
+    fileSize: row.fileSize,
+    creditUsed: row.creditUsed,
+    errorMessage: row.errorMessage,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    completedAt: row.completedAt,
+    params: row.params,
+  };
+}

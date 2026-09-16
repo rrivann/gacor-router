@@ -15,6 +15,7 @@ export interface Caps {
   chat: boolean;
   images: boolean;
   imageGen?: boolean;
+  videoGen?: boolean;
 }
 
 // Image generation request/response. Shape mirrors 0penAI's
@@ -38,6 +39,40 @@ export interface ImageOut {
 export interface ImageResponse {
   created: number;
   data: ImageOut[];
+}
+
+// Video generation request. Async upstream: submit returns a task id, then a
+// separate poll returns the signed URL once the render finishes (~3-4 min for
+// seedance-2.5). Client shape is intentionally close to CodeBuddy's own body.
+export interface VideoRequest {
+  model: string;
+  prompt: string;
+  // Upstream constraint (live-verified 2026-09-16): min 4, max 30.
+  seconds: number;
+  resolution?: "720P" | "1080P";
+  aspectRatio?: "16:9" | "9:16" | "1:1";
+  audio?: boolean;
+  negativePrompt?: string;
+  watermark?: boolean;
+  raw?: unknown;
+}
+
+// What comes back from the submit call. The task id is what the poller uses
+// to check progress against /v2/videos/tasks.
+export interface VideoSubmitResult {
+  taskId: string;
+  status: string; // "queued" from CodeBuddy in practice
+}
+
+// Normalized poll response. Only `completed` carries `url` and `credit`;
+// intermediate statuses just update lifecycle.
+export interface VideoPollResult {
+  status: "queued" | "in_progress" | "completed" | "failed";
+  url?: string;
+  resolution?: string;
+  credit?: number;
+  outputTokens?: number;
+  errorMessage?: string;
 }
 
 // Canonical internal request — everything is normalized into this shape
@@ -119,8 +154,9 @@ export interface ModelInfo {
   images?: boolean;
   toolCalls?: boolean;
   // What endpoint serves this model. "chat" (default) → /v1/chat/completions
-  // and /v1/messages. "image" → /v1/images/generations.
-  kind?: "chat" | "image";
+  // and /v1/messages. "image" → /v1/images/generations. "video" →
+  // /v1/videos/generations (async: submit + poll + download).
+  kind?: "chat" | "image" | "video";
 }
 
 // One billing package inside an account — CodeBuddy ships a bundle: a
@@ -166,4 +202,13 @@ export interface Provider {
   // Optional: generate an image. Non-stream by design — image endpoints ship
   // one JSON response with a URL or base64 payload.
   image?(req: ImageRequest, acc: Account): Promise<{ resp: Response; parse: () => Promise<ImageResponse> }>;
+  // Optional: submit a video generation job. Returns the raw upstream response
+  // (so the proxy loop can classify + rotate) plus a parser that unwraps the
+  // envelope into a task id. The job then progresses asynchronously and is
+  // driven by pollVideo — the caller decides when to check.
+  video?(req: VideoRequest, acc: Account): Promise<{ resp: Response; parse: () => Promise<VideoSubmitResult> }>;
+  // Optional: poll a submitted video job. Returns the normalized lifecycle
+  // status; on `completed` the signed download URL is populated. Same account
+  // that submitted must poll — the bearer scopes the task lookup.
+  pollVideo?(taskId: string, acc: Account): Promise<VideoPollResult>;
 }

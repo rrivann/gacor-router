@@ -77,6 +77,29 @@ new Database(dbPath).exec(`
     created_at integer not null
   );
   CREATE UNIQUE INDEX idx_api_keys_secret ON api_keys (secret);
+  CREATE TABLE video_jobs (
+    id integer primary key autoincrement,
+    provider text not null,
+    model text not null,
+    account_id integer not null,
+    account_label text,
+    api_key_id integer,
+    task_id text not null,
+    status text default 'queued' not null,
+    params text not null,
+    file_path text,
+    file_size integer,
+    video_url text,
+    credit_used real,
+    dollar_cost real,
+    error_message text,
+    request_log_id integer,
+    created_at integer not null,
+    updated_at integer,
+    completed_at integer
+  );
+  CREATE INDEX idx_video_jobs_status_created ON video_jobs (status, created_at);
+  CREATE INDEX idx_video_jobs_task ON video_jobs (task_id);
   INSERT INTO accounts (provider,label,secret,status,created_at)
     VALUES ('codebuddy','acc-1','token-1','active',0);
 `);

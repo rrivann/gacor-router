@@ -11,6 +11,7 @@ import {
   MessagesSquare,
   Filter,
   KeyRound,
+  Film,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
@@ -29,6 +30,7 @@ const sections: { title: string; items: NavItem[] }[] = [
     items: [
       { label: "Dashboard", path: "/", icon: LayoutDashboard },
       { label: "Chat", path: "/chat", icon: MessagesSquare },
+      { label: "Videos", path: "/videos", icon: Film },
       { label: "Accounts", path: "/accounts", icon: Users },
       { label: "Models", path: "/models", icon: Cpu },
     ],

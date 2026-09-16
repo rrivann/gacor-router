@@ -53,6 +53,8 @@ import {
   updateApiKey,
 } from "../db/apiKeys";
 import { generateApiKeySecret, invalidateApiKeyCache } from "../lib/apiKeyAuth";
+import { listVideoJobs, getVideoJob, deleteVideoJob } from "../db/videoJobs";
+import { unlinkSync, existsSync } from "node:fs";
 
 export const manage = new Hono();
 
@@ -602,6 +604,34 @@ manage.delete("/keys/:id", (c) => {
   const id = Number(c.req.param("id"));
   if (!deleteApiKey(id)) return errorResponse(404, "invalid_request_error", `key #${id} not found`);
   invalidateApiKeyCache();
+  return c.json({ ok: true });
+});
+
+// ── Video jobs (dashboard) ───────────────────────────────────────
+// Read-only listing + detail + delete. Submission goes through /v1/videos/*
+// (client API) instead — the dashboard would use that too.
+
+manage.get("/videos", (c) => {
+  const status = c.req.query("status");
+  const rows = listVideoJobs({ status: status || undefined, limit: 200 });
+  return c.json({ data: rows });
+});
+
+manage.get("/videos/:id", (c) => {
+  const id = Number(c.req.param("id"));
+  const row = getVideoJob(id);
+  if (!row) return errorResponse(404, "invalid_request_error", `video job #${id} not found`);
+  return c.json({ data: row });
+});
+
+manage.delete("/videos/:id", (c) => {
+  const id = Number(c.req.param("id"));
+  const row = deleteVideoJob(id);
+  if (!row) return errorResponse(404, "invalid_request_error", `video job #${id} not found`);
+  // Best-effort file cleanup — an already-missing file is fine.
+  if (row.filePath && existsSync(row.filePath)) {
+    try { unlinkSync(row.filePath); } catch {}
+  }
   return c.json({ ok: true });
 });
 

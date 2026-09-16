@@ -161,3 +161,64 @@ export const requestLogs = sqliteTable(
     index("idx_request_logs_provider_created").on(t.provider, t.createdAt),
   ]
 );
+
+// Video generation jobs. Video is async at the upstream: submit returns a
+// task id, then a poller checks /v2/videos/tasks until the signed COS mp4 URL
+// arrives. That URL expires in ~12h, so a background worker downloads the
+// bytes to ./videos/{id}.mp4 and this table is the single source of truth
+// clients read to know a job's state.
+export const videoJobs = sqliteTable(
+  "video_jobs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    // The account that owns the upstream task id. The poller re-uses this
+    // account for every /v2/videos/tasks call — a different account's bearer
+    // can't read someone else's task.
+    accountId: integer("account_id").notNull(),
+    accountLabel: text("account_label"),
+    // Which client key paid for the job. Null on loopback or open-gateway
+    // submits (same rule as api_keys usage accounting for chat).
+    apiKeyId: integer("api_key_id"),
+    // Upstream identifier ("v89546156-…"). Unique per submit.
+    taskId: text("task_id").notNull(),
+    // queued | in_progress | completed | failed
+    status: text("status", { mode: "text" }).notNull().default("queued"),
+    params: text("params", { mode: "json" })
+      .$type<{
+        prompt: string;
+        seconds: number;
+        resolution: "720P" | "1080P";
+        aspectRatio: "16:9" | "9:16" | "1:1";
+        audio: boolean;
+        negativePrompt: string;
+        watermark: boolean;
+      }>()
+      .notNull(),
+    // On-disk path once the worker has fetched the mp4. Null while pending.
+    filePath: text("file_path"),
+    fileSize: integer("file_size"),
+    // Last-known signed COS URL from upstream. Kept for debugging; download
+    // clients get /v1/videos/:id/download from disk instead.
+    videoUrl: text("video_url"),
+    // Upstream-reported cost (usage.credit) and gateway-side USD estimate.
+    creditUsed: real("credit_used"),
+    dollarCost: real("dollar_cost"),
+    errorMessage: text("error_message"),
+    // Links to the request_logs row written at submit time so the Requests
+    // page can jump between the two views.
+    requestLogId: integer("request_log_id"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp" }),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+  },
+  (t) => [
+    // Poller sweep: find pending jobs oldest first.
+    index("idx_video_jobs_status_created").on(t.status, t.createdAt),
+    // Correlation: look up a job by upstream task id.
+    index("idx_video_jobs_task").on(t.taskId),
+  ]
+);

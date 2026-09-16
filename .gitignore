@@ -6,6 +6,7 @@ dist/
 *.db-wal
 *.db-shm
 logs/
+videos/
 .DS_Store
 .claude/
 tsconfig.tsbuildinfo
