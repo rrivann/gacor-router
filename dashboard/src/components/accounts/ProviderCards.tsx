@@ -84,6 +84,8 @@ export function ProviderCards({
   onWarm: (provider: string) => void;
   onOpenSettings: (provider: string) => void;
 }) {
+  // Empty providers array = no known providers configured. Callers normally
+  // seed a known-providers list (see Accounts.tsx) so this branch stays cold.
   if (providers.length === 0) return null;
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">

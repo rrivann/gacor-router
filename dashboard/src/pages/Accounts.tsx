@@ -78,7 +78,14 @@ export default function Accounts() {
 
   useWsEvent("account_status", () => load());
 
-  const providers = [...new Set(accounts.map((a) => a.provider))].sort();
+  // Always surface the built-in providers even if the pool is empty — the
+  // etteum pattern: user sees a CodeBuddy card straight away and clicks its
+  // Add button to fill it. Providers derived from actual rows are unioned in
+  // so third-party ones (if the user ever adds them) show up too.
+  const KNOWN_PROVIDERS = ["codebuddy"];
+  const providers = [
+    ...new Set([...KNOWN_PROVIDERS, ...accounts.map((a) => a.provider)]),
+  ].sort();
 
   // Status counts for the drill-down pills (scoped to the picked provider).
   const inProvider = providerFilter === "all" ? accounts : accounts.filter((a) => a.provider === providerFilter);
@@ -280,9 +287,6 @@ export default function Accounts() {
             <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={loading}>
               <RefreshCw className="h-4 w-4" /> Refresh
             </Button>
-            <Button size="sm" onClick={() => { setAddProvider("codebuddy"); setShowAdd(true); }}>
-              <Plus className="h-4 w-4" /> Add account
-            </Button>
           </div>
         </div>
       ) : (
@@ -334,43 +338,26 @@ export default function Accounts() {
       )}
 
       {providerFilter === "all" ? (
-        providers.length === 0 && !loading ? (
-          /* Empty state — brand-new install, no accounts yet. Provider cards
-             suppress themselves when the list is empty, so this is the only
-             UI the user sees before adding their first credential. */
-          <Card className="py-12 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-muted-foreground">
-              <Plus className="h-5 w-5" />
-            </div>
-            <div className="mt-3 text-sm font-medium">No accounts yet</div>
-            <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-              Add a CodeBuddy refresh token (JWT) or an api_key (ck_…) to start routing traffic.
-            </p>
-            <div className="mt-4">
-              <Button size="sm" onClick={() => { setAddProvider("codebuddy"); setShowAdd(true); }}>
-                <Plus className="h-4 w-4" /> Add your first account
-              </Button>
-            </div>
-          </Card>
-        ) : (
-          /* Provider summary cards (click drills in, gear toggles rotation) */
-          <ProviderCards
-            providers={providers}
-            accounts={accounts}
-            selected={providerFilter}
-            rotation={rotation}
-            retrying={retryingProvider}
-            warming={warmingProvider}
-            onSelect={selectProvider}
-            onAdd={(p) => {
-              setAddProvider(p);
-              setShowAdd(true);
-            }}
-            onRetry={handleProviderRetry}
-            onWarm={handleProviderWarm}
-            onOpenSettings={setSettingsProvider}
-          />
-        )
+        /* Provider summary cards (click drills in, gear toggles rotation).
+           Always render — a card for each known provider surfaces even when
+           the pool is empty, so the user can hit Add without scanning for a
+           different affordance. */
+        <ProviderCards
+          providers={providers}
+          accounts={accounts}
+          selected={providerFilter}
+          rotation={rotation}
+          retrying={retryingProvider}
+          warming={warmingProvider}
+          onSelect={selectProvider}
+          onAdd={(p) => {
+            setAddProvider(p);
+            setShowAdd(true);
+          }}
+          onRetry={handleProviderRetry}
+          onWarm={handleProviderWarm}
+          onOpenSettings={setSettingsProvider}
+        />
       ) : (
         <>
           {/* Status filter pills (etteum) + search */}
