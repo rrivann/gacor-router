@@ -280,6 +280,9 @@ export default function Accounts() {
             <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={loading}>
               <RefreshCw className="h-4 w-4" /> Refresh
             </Button>
+            <Button size="sm" onClick={() => { setAddProvider("codebuddy"); setShowAdd(true); }}>
+              <Plus className="h-4 w-4" /> Add account
+            </Button>
           </div>
         </div>
       ) : (
@@ -331,23 +334,43 @@ export default function Accounts() {
       )}
 
       {providerFilter === "all" ? (
-        /* Provider summary cards (click drills in, gear toggles rotation) */
-        <ProviderCards
-          providers={providers}
-          accounts={accounts}
-          selected={providerFilter}
-          rotation={rotation}
-          retrying={retryingProvider}
-          warming={warmingProvider}
-          onSelect={selectProvider}
-          onAdd={(p) => {
-            setAddProvider(p);
-            setShowAdd(true);
-          }}
-          onRetry={handleProviderRetry}
-          onWarm={handleProviderWarm}
-          onOpenSettings={setSettingsProvider}
-        />
+        providers.length === 0 && !loading ? (
+          /* Empty state — brand-new install, no accounts yet. Provider cards
+             suppress themselves when the list is empty, so this is the only
+             UI the user sees before adding their first credential. */
+          <Card className="py-12 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+              <Plus className="h-5 w-5" />
+            </div>
+            <div className="mt-3 text-sm font-medium">No accounts yet</div>
+            <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
+              Add a CodeBuddy refresh token (JWT) or an api_key (ck_…) to start routing traffic.
+            </p>
+            <div className="mt-4">
+              <Button size="sm" onClick={() => { setAddProvider("codebuddy"); setShowAdd(true); }}>
+                <Plus className="h-4 w-4" /> Add your first account
+              </Button>
+            </div>
+          </Card>
+        ) : (
+          /* Provider summary cards (click drills in, gear toggles rotation) */
+          <ProviderCards
+            providers={providers}
+            accounts={accounts}
+            selected={providerFilter}
+            rotation={rotation}
+            retrying={retryingProvider}
+            warming={warmingProvider}
+            onSelect={selectProvider}
+            onAdd={(p) => {
+              setAddProvider(p);
+              setShowAdd(true);
+            }}
+            onRetry={handleProviderRetry}
+            onWarm={handleProviderWarm}
+            onOpenSettings={setSettingsProvider}
+          />
+        )
       ) : (
         <>
           {/* Status filter pills (etteum) + search */}
