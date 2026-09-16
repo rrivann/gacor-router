@@ -6,6 +6,13 @@ export interface ApiError {
   error: { message: string; type: string; code: string | null };
 }
 
+export class ApiHttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "ApiHttpError";
+  }
+}
+
 export async function fetchApi<T = unknown>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "content-type": "application/json", ...options?.headers },
@@ -17,7 +24,7 @@ export async function fetchApi<T = unknown>(path: string, options?: RequestInit)
       const body = (await res.json()) as ApiError;
       if (body.error?.message) message = body.error.message;
     } catch {}
-    throw new Error(message);
+    throw new ApiHttpError(res.status, message);
   }
   return res.json() as Promise<T>;
 }
@@ -388,6 +395,30 @@ export interface DebugProcess {
 }
 
 export const fetchDebugProcess = () => fetchApi<DebugProcess>("/api/debug/process");
+
+// ── Dashboard auth ───────────────────────────────────────────────
+
+export interface AuthStatus {
+  needsPassword: boolean;
+  authenticated: boolean;
+  loopback: boolean;
+}
+
+export const fetchAuthStatus = () => fetchApi<AuthStatus>("/api/auth/status");
+
+export const login = (password: string) =>
+  fetchApi<{ ok: boolean; mustChangePassword: boolean }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+
+export const logout = () => fetchApi<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  fetchApi<{ ok: boolean }>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
 
 // ── Video jobs ───────────────────────────────────────────────────
 

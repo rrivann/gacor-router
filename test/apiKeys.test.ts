@@ -100,6 +100,13 @@ new Database(dbPath).exec(`
   );
   CREATE INDEX idx_video_jobs_status_created ON video_jobs (status, created_at);
   CREATE INDEX idx_video_jobs_task ON video_jobs (task_id);
+  CREATE TABLE dashboard_auth (
+    id integer primary key autoincrement,
+    password_hash text not null,
+    jwt_secret text not null,
+    created_at integer not null,
+    updated_at integer not null
+  );
   INSERT INTO accounts (provider,label,secret,status,created_at)
     VALUES ('codebuddy','acc-1','token-1','active',0);
 `);

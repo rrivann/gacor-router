@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
-import { Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { deleteSetting, fetchSettings, saveSettings } from "../lib/api";
+import { changePassword, deleteSetting, fetchSettings, saveSettings } from "../lib/api";
 import { useTimedMessage } from "../hooks/useTimedMessage";
+import { useAuth } from "../hooks/useAuth";
 
 // Settings is a flat KV store. Two keys have structural meaning to the
 // router (default_provider, pool_rotation:<provider>); the rest is free-form.
@@ -116,6 +118,9 @@ export default function Settings() {
         </CardContent>
       </Card>
 
+      <DashboardPasswordCard />
+
+
       <Card>
         <CardHeader>
           <CardTitle>All Settings</CardTitle>
@@ -206,5 +211,85 @@ function SettingRow({
         <Trash2 className="h-4 w-4 text-error" />
       </Button>
     </div>
+  );
+}
+
+// Change-password card. Auto-opens the form when the router lands here with
+// ?changePassword=1 (Login sends first-time users straight here). Successful
+// change rotates the JWT secret server-side, so the current cookie is invalid
+// on the very next request — we bounce the user to /login as a clean handoff.
+function DashboardPasswordCard() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { refresh: refreshAuth } = useAuth();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [ok, setOk] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [autoFilledDefault, setAutoFilledDefault] = useState(false);
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get("changePassword") === "1" && !autoFilledDefault) {
+      setCurrent("123456");
+      setAutoFilledDefault(true);
+    }
+  }, [location.search, autoFilledDefault]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setErr(null); setOk(null);
+    if (next.length < 6) { setErr("new password must be at least 6 characters"); return; }
+    if (next !== confirm) { setErr("passwords don't match"); return; }
+    setBusy(true);
+    try {
+      await changePassword(current, next);
+      setOk("Password changed. Redirecting to sign in…");
+      setCurrent(""); setNext(""); setConfirm("");
+      await refreshAuth();
+      setTimeout(() => navigate("/login", { replace: true }), 700);
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <KeyRound className="h-4 w-4" /> Dashboard Password
+        </CardTitle>
+        <CardDescription>
+          Changes the password used to sign in to this dashboard. Any existing sessions (including this one)
+          are invalidated — you'll be sent to the login screen after saving.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-3">
+          <label className="block space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">Current password</span>
+            <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" />
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">New password (min 6)</span>
+            <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" />
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span className="text-xs text-muted-foreground">Confirm new password</span>
+            <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
+          </label>
+          {ok && <div className="sm:col-span-3 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">{ok}</div>}
+          {err && <div className="sm:col-span-3 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">{err}</div>}
+          <div className="sm:col-span-3 flex justify-end">
+            <Button type="submit" size="sm" disabled={busy || !current || !next}>
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />} Change password
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }

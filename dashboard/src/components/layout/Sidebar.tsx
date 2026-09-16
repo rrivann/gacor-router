@@ -12,7 +12,10 @@ import {
   Filter,
   KeyRound,
   Film,
+  LogOut,
 } from "lucide-react";
+import { logout } from "../../lib/api";
+import { useAuth } from "../../hooks/useAuth";
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
 import { useWsStatus } from "../../hooks/useWebSocket";
@@ -53,6 +56,17 @@ const sections: { title: string; items: NavItem[] }[] = [
 export default function Sidebar() {
   const { theme, toggleTheme } = useTheme();
   const wsStatus = useWsStatus();
+  const { status: authStatus, refresh: refreshAuth } = useAuth();
+  // No logout button on loopback (there's no cookie to clear — the user just
+  // reaches the dashboard directly). On a public/tunnel URL the button is
+  // meaningful because it clears the session cookie.
+  const showLogout = authStatus && !authStatus.loopback;
+
+  async function handleLogout() {
+    try { await logout(); } catch {}
+    await refreshAuth();
+    // AuthGate will Navigate to /login on the next render.
+  }
 
   const wsMeta =
     wsStatus === "open"
@@ -119,6 +133,14 @@ export default function Sidebar() {
           {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           {theme === "dark" ? "Light mode" : "Dark mode"}
         </button>
+        {showLogout && (
+          <button
+            onClick={handleLogout}
+            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-secondary-foreground hover:bg-error/10 hover:text-error"
+          >
+            <LogOut className="h-4 w-4" /> Logout
+          </button>
+        )}
       </div>
     </aside>
   );

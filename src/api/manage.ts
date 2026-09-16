@@ -1,8 +1,12 @@
-// Management API for the dashboard. All routes live under /api and are
-// unauthenticated by design — the router binds to 127.0.0.1 and is
-// single-user. If that ever changes, gate these first.
+// Management API for the dashboard. All routes live under /api. A session
+// gate (sessionAuth) protects them by default; requests from loopback bypass
+// the gate the same way apiKeyAuth does for /v1/*, so the developer on their
+// own machine keeps a friction-free experience. The auth routes themselves
+// (/api/auth/*) are registered BEFORE the gate so login/status stay reachable
+// without a cookie.
 
 import { Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import {
   createAccount,
   deleteAccount,
@@ -55,8 +59,112 @@ import {
 import { generateApiKeySecret, invalidateApiKeyCache } from "../lib/apiKeyAuth";
 import { listVideoJobs, getVideoJob, deleteVideoJob } from "../db/videoJobs";
 import { unlinkSync, existsSync } from "node:fs";
+import {
+  COOKIE_NAME,
+  clearSession,
+  currentRow,
+  hasPassword,
+  isLoopbackRequest,
+  issueSession,
+  sessionAuth,
+  setPassword,
+  verifyPassword,
+  verifySessionCookie,
+} from "../lib/dashboardAuth";
+import { checkLock, getClientIp, recordFail, recordSuccess } from "../lib/loginLimiter";
 
 export const manage = new Hono();
+
+// ── Dashboard auth (registered FIRST so /api/auth/* is reachable without a
+// session cookie — the gate below wraps everything else) ─────────────────
+
+// Report auth state so the SPA can decide whether to redirect to /login,
+// show a "set a password" prompt, or render normally.
+manage.get("/auth/status", async (c) => {
+  const has = hasPassword();
+  const loopback = isLoopbackRequest(c);
+  // Loopback and no-password both count as effectively authenticated — the
+  // gate would let them through anyway.
+  let authenticated = !has || loopback;
+  if (has && !loopback) {
+    const token = getCookie(c, COOKIE_NAME);
+    authenticated = await verifySessionCookie(token);
+  }
+  return c.json({ needsPassword: !has, authenticated, loopback });
+});
+
+// Verify password + issue the JWT cookie. Materialises the default password
+// as a real row on first success so subsequent logins take the bcrypt path.
+manage.post("/auth/login", async (c) => {
+  const ip = getClientIp(c);
+  const lock = checkLock(ip);
+  if (lock.locked) {
+    return errorResponse(
+      429,
+      "invalid_request_error",
+      `too many failed attempts — retry in ${lock.retryAfter}s`
+    );
+  }
+
+  let body: { password?: unknown };
+  try { body = await c.req.json(); }
+  catch { return errorResponse(400, "invalid_request_error", "invalid JSON body"); }
+  const password = typeof body.password === "string" ? body.password : "";
+
+  const result = await verifyPassword(password);
+  if (!result.ok) {
+    const { remainingBeforeLock } = recordFail(ip);
+    return errorResponse(
+      401,
+      "invalid_request_error",
+      `invalid password (${remainingBeforeLock} attempt(s) before lockout)`
+    );
+  }
+  recordSuccess(ip);
+
+  // If the row didn't exist yet and the default password matched, materialise
+  // it now so we have a JWT secret to sign with. The session then rides on the
+  // real row for the rest of its lifetime.
+  if (result.usingDefault) await setPassword(password);
+  const row = currentRow();
+  if (!row) return errorResponse(500, "internal_error", "session row missing after setPassword");
+
+  await issueSession(c, row.jwtSecret);
+  return c.json({ ok: true, mustChangePassword: result.usingDefault });
+});
+
+manage.post("/auth/logout", (c) => {
+  clearSession(c);
+  return c.json({ ok: true });
+});
+
+// Change the password. Requires the current password even though the session
+// gate already ran — defense in depth against a stolen cookie. Rotates the
+// JWT secret so every other active session (there shouldn't be any, but…) is
+// invalidated at the same time. The current caller's cookie is cleared too;
+// they'll be redirected to /login by the SPA on the next fetch.
+manage.post("/auth/change-password", async (c) => {
+  let body: { currentPassword?: unknown; newPassword?: unknown };
+  try { body = await c.req.json(); }
+  catch { return errorResponse(400, "invalid_request_error", "invalid JSON body"); }
+
+  const current = typeof body.currentPassword === "string" ? body.currentPassword : "";
+  const next = typeof body.newPassword === "string" ? body.newPassword : "";
+  if (next.length < 6) {
+    return errorResponse(400, "invalid_request_error", "new password must be at least 6 characters", "newPassword");
+  }
+  const check = await verifyPassword(current);
+  if (!check.ok) {
+    return errorResponse(403, "invalid_request_error", "current password incorrect", "currentPassword");
+  }
+  await setPassword(next);
+  clearSession(c);
+  return c.json({ ok: true });
+});
+
+// Everything below this line requires a valid session (subject to the
+// bypasses documented in dashboardAuth: no-password-yet and loopback).
+manage.use("*", sessionAuth);
 
 // ── Accounts ─────────────────────────────────────────────────────
 

@@ -222,3 +222,16 @@ export const videoJobs = sqliteTable(
     index("idx_video_jobs_task").on(t.taskId),
   ]
 );
+
+// Singleton row for the dashboard login credential + its JWT signing secret.
+// Zero rows means "no password configured yet" — the auth middleware treats
+// that as open-gateway so a fresh install can reach /api/* to bootstrap.
+// Rotating the JWT secret on every password change is how existing sessions
+// get invalidated implicitly (their signature stops verifying).
+export const dashboardAuth = sqliteTable("dashboard_auth", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  passwordHash: text("password_hash").notNull(),
+  jwtSecret: text("jwt_secret").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+});

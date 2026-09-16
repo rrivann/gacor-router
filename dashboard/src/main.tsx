@@ -3,14 +3,17 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { WebSocketProvider } from "./hooks/useWebSocket";
+import { AuthProvider } from "./hooks/useAuth";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
-      <WebSocketProvider>
-        <App />
-      </WebSocketProvider>
+      <AuthProvider>
+        <WebSocketProvider>
+          <App />
+        </WebSocketProvider>
+      </AuthProvider>
     </BrowserRouter>
   </StrictMode>
 );

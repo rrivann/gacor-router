@@ -10,6 +10,8 @@ import Tunnel from "./pages/Tunnel";
 import Filters from "./pages/Filters";
 import ApiKeys from "./pages/ApiKeys";
 import Videos from "./pages/Videos";
+import Login from "./pages/Login";
+import { AuthGate } from "./components/AuthGate";
 
 // Chat pulls in react-syntax-highlighter (~280KB gzip) — lazy-load it so the
 // main bundle stays lean and the highlighter only downloads on /chat.
@@ -18,7 +20,8 @@ const Chat = lazy(() => import("./pages/Chat"));
 export default function App() {
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route path="login" element={<Login />} />
+      <Route element={<AuthGate><Layout /></AuthGate>}>
         <Route index element={<Dashboard />} />
         <Route
           path="chat"
