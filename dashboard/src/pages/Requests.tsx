@@ -151,12 +151,13 @@ export default function Requests() {
                 <th className="px-4 py-3 text-right">TTFT</th>
                 <th className="px-4 py-3 text-right">Latency</th>
                 <th className="px-4 py-3 text-right">Credit</th>
+                <th className="px-4 py-3">Stream</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
+                  <td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">
                     {loading ? "Loading…" : "No requests yet"}
                   </td>
                 </tr>
@@ -211,6 +212,13 @@ export default function Requests() {
                       <span className="text-primary">{l.creditUsed.toFixed(2)}</span>
                     ) : (
                       "—"
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {l.stream ? (
+                      <Badge variant="info">stream</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">json</span>
                     )}
                   </td>
                 </tr>
