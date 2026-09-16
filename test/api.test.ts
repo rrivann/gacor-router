@@ -395,6 +395,45 @@ test("POST /api/accounts creates, reveal returns the secret, delete removes", as
   expect((await manage.request(`/accounts/${id}/reveal`)).status).toBe(404);
 });
 
+test("POST /api/accounts accepts creds.api_key credential (ck_ prefix)", async () => {
+  const secret = "ck_test_" + Bun.randomUUIDv7();
+  const created = await manage.request("/accounts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "codebuddy", creds: { api_key: secret } }),
+  });
+  expect(created.status).toBe(201);
+  const { id } = await created.json();
+
+  // Label should auto-derive from the api_key fingerprint (first 3 + last 4).
+  const list = await manage.request("/accounts?provider=codebuddy");
+  const row = ((await list.json()).data as { id: number; label: string | null }[]).find((r) => r.id === id);
+  expect(row?.label).toBe(`${secret.slice(0, 3)}…${secret.slice(-4)}`);
+
+  await manage.request(`/accounts/${id}`, { method: "DELETE" });
+});
+
+test("POST /api/accounts rejects duplicate api_key with 409", async () => {
+  const secret = "ck_dup_" + Bun.randomUUIDv7();
+  const first = await manage.request("/accounts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "codebuddy", creds: { api_key: secret } }),
+  });
+  expect(first.status).toBe(201);
+  const { id: firstId } = await first.json();
+
+  const dup = await manage.request("/accounts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "codebuddy", creds: { api_key: secret } }),
+  });
+  expect(dup.status).toBe(409);
+  expect((await dup.json()).error.message).toContain("api_key already used");
+
+  await manage.request(`/accounts/${firstId}`, { method: "DELETE" });
+});
+
 test("POST /api/accounts/:id/status flips status and emits account_status", async () => {
   const events: { type: string; data: unknown }[] = [];
   const off = onEvent((e) => events.push(e));

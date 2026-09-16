@@ -30,6 +30,21 @@ export function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+// Credential type detection. Mirrors src/lib/credential.ts on the backend —
+// duplicated 5 lines so the dashboard bundle stays self-contained (no cross-
+// boundary import from /src). CodeBuddy issues two formats:
+//   - refresh_token: JWT ("eyJ..." prefix)
+//   - api_key: opaque, prefix "ck_"
+// Anything else defaults to refresh_token to preserve the pre-existing paste
+// flow for users copying raw tokens from the CLI.
+export type CredentialKind = "refresh_token" | "api_key";
+
+export function detectCredentialType(token: string): CredentialKind {
+  const t = token.trim();
+  if (t.startsWith("ck_")) return "api_key";
+  return "refresh_token";
+}
+
 // Deterministic chart color for a model label.
 export function modelColor(label: string, index = 0): string {
   let hash = index * 31;

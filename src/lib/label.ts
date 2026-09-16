@@ -3,6 +3,8 @@
 // row's numeric id shifts, and it tells the user which upstream identity the
 // row actually holds.
 
+import { labelForApiKey } from "./credential";
+
 export function decodeJwtPayload(token: string | undefined): Record<string, unknown> | null {
   if (!token) return null;
   const parts = token.split(".");
@@ -54,6 +56,11 @@ export function deriveLabel(creds: Record<string, string> | null | undefined): s
 
   const rtSub = asString(rt?.sub);
   if (rtSub) return rtSub.slice(0, 8);
+
+  // Opaque api_key (no JWT claims to mine). Fingerprint it so the row still
+  // gets a distinctive label instead of a blank one.
+  const apiKey = asString(creds.api_key);
+  if (apiKey) return labelForApiKey(apiKey);
 
   return null;
 }

@@ -18,7 +18,7 @@ import {
   warmAll,
   type AccountRow,
 } from "../lib/api";
-import { formatDateTime, cn } from "../lib/utils";
+import { formatDateTime, cn, detectCredentialType } from "../lib/utils";
 import { useTimedMessage } from "../hooks/useTimedMessage";
 import { useWsEvent } from "../hooks/useWebSocket";
 import { CreditCell } from "../components/accounts/CreditCell";
@@ -590,11 +590,18 @@ function AddAccountDialog({
   async function submitSingle() {
     setBusy(true);
     try {
-      const rt = refreshToken.trim();
+      const token = refreshToken.trim();
+      if (!token) return;
+      // Auto-detect from the token's shape: "ck_" is a CodeBuddy api_key
+      // (used as-is, no refresh), anything else is treated as a refresh_token
+      // (JWT that the provider exchanges for a fresh access token).
+      const kind = detectCredentialType(token);
+      const creds: Record<string, string> =
+        kind === "api_key" ? { api_key: token } : { refresh_token: token };
       await createAccount({
         provider: provider.trim(),
         label: label.trim() || undefined,
-        creds: rt ? { refresh_token: rt } : undefined,
+        creds,
       });
       onCreated();
     } catch (err) {
@@ -612,12 +619,13 @@ function AddAccountDialog({
     if (raw.length === 0) return;
 
     // Frontend pre-filter: only dedup against duplicates within the paste
-    // itself (RT string + JWT sub). The list endpoint doesn't expose token
-    // values, so pool-scope dedup is the backend's job — it returns 409 and
-    // we surface that as "skipped" below. Same-provider row count is only used
-    // to hint the user in the counter.
+    // itself (RT string + JWT sub + api_key string). The list endpoint doesn't
+    // expose token values, so pool-scope dedup is the backend's job — it
+    // returns 409 and we surface that as "skipped" below. Mixed input works
+    // out of the box: each line is detected independently.
     void existingAccounts;
     const seenRts = new Set<string>();
+    const seenApiKeys = new Set<string>();
     const seenSubs = new Set<string>();
 
     setBusy(true);
@@ -626,33 +634,59 @@ function AddAccountDialog({
     setProgress({ done: 0, total: raw.length, failed, skipped });
 
     for (let i = 0; i < raw.length; i++) {
-      const rt = raw[i]!;
-      // Skip if this line duplicates an earlier line in the same paste.
-      if (seenRts.has(rt)) {
-        skipped.push({ rt, reason: "duplicate line in paste" });
+      const token = raw[i]!;
+      const kind = detectCredentialType(token);
+
+      if (kind === "api_key") {
+        if (seenApiKeys.has(token)) {
+          skipped.push({ rt: token, reason: "duplicate api_key in paste" });
+          setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
+          continue;
+        }
+        try {
+          await createAccount({
+            provider: provider.trim(),
+            creds: { api_key: token },
+          });
+          seenApiKeys.add(token);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("already used") || msg.includes("same upstream identity")) {
+            skipped.push({ rt: token, reason: msg });
+          } else {
+            failed.push({ rt: token, err: msg });
+          }
+        }
         setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
         continue;
       }
-      const sub = decodeJwtSub(rt);
+
+      // refresh_token path (JWT) — unchanged.
+      if (seenRts.has(token)) {
+        skipped.push({ rt: token, reason: "duplicate line in paste" });
+        setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
+        continue;
+      }
+      const sub = decodeJwtSub(token);
       if (sub && seenSubs.has(sub)) {
-        skipped.push({ rt, reason: "same JWT sub as earlier line" });
+        skipped.push({ rt: token, reason: "same JWT sub as earlier line" });
         setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
         continue;
       }
       try {
         await createAccount({
           provider: provider.trim(),
-          creds: { refresh_token: rt },
+          creds: { refresh_token: token },
         });
-        seenRts.add(rt);
+        seenRts.add(token);
         if (sub) seenSubs.add(sub);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // Backend's 409 for duplicates is expected — surface as "skipped", not "failed".
         if (msg.includes("already used") || msg.includes("same upstream identity")) {
-          skipped.push({ rt, reason: msg });
+          skipped.push({ rt: token, reason: msg });
         } else {
-          failed.push({ rt, err: msg });
+          failed.push({ rt: token, err: msg });
         }
       }
       setProgress({ done: i + 1, total: raw.length, failed: [...failed], skipped: [...skipped] });
@@ -707,23 +741,30 @@ function AddAccountDialog({
 
         {mode === "single" ? (
           <label className="block space-y-1 text-sm">
-            <span className="text-xs text-muted-foreground">refresh_token</span>
-            <Input value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} />
             <span className="text-xs text-muted-foreground">
-              The access token is minted on first use and rotated automatically.
+              refresh_token or api_key
+              {refreshToken.trim() && (
+                <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+                  detected: {detectCredentialType(refreshToken)}
+                </span>
+              )}
+            </span>
+            <Input value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder="eyJhbGc… or ck_…" />
+            <span className="text-xs text-muted-foreground">
+              JWT refresh tokens are auto-refreshed; opaque api_keys (prefix <code className="rounded bg-secondary px-1 py-0.5 text-[10px]">ck_</code>) are used as-is.
             </span>
           </label>
         ) : (
           <label className="block space-y-1 text-sm">
-            <span className="text-xs text-muted-foreground">refresh_tokens (one per line)</span>
+            <span className="text-xs text-muted-foreground">tokens (one per line — mixed refresh_token + api_key ok)</span>
             <Textarea
               value={bulkTokens}
               onChange={(e) => setBulkTokens(e.target.value)}
-              placeholder={"eyJhbGc…rt1\neyJhbGc…rt2\neyJhbGc…rt3"}
+              placeholder={"eyJhbGc…rt1\nck_fug2b9…apikey\neyJhbGc…rt2"}
               className="min-h-32 font-mono text-xs"
             />
             <span className="text-xs text-muted-foreground">
-              Each line becomes one account. Labels are derived from each JWT after warmup.
+              Each line becomes one account. Type auto-detected from the prefix (<code className="rounded bg-secondary px-1 py-0.5 text-[10px]">ck_</code> = api_key, else refresh_token).
             </span>
           </label>
         )}

@@ -84,16 +84,22 @@ manage.post("/accounts", async (c) => {
     return errorResponse(400, "invalid_request_error", "either `secret` or `creds` is required");
   }
 
-  // Dedup: reject a credential whose RT string OR JWT identity (sub) already
-  // sits under the same provider. Two RT strings with matching sub are the
-  // same upstream account — pooling them would double-count quota.
+  // Dedup: reject a credential whose RT string, JWT identity (sub), or api_key
+  // already sits under the same provider. Two credentials that map to the same
+  // upstream account (matching sub, matching api_key, or literal RT reuse)
+  // would double-count quota if pooled together.
   const existing = listAccounts(body.provider);
   const newRt = creds?.refresh_token?.trim();
+  const newApiKey = creds?.api_key?.trim();
   const newSub = deriveIdentity(creds);
   for (const row of existing) {
     const rowRt = row.creds?.refresh_token?.trim();
     if (newRt && rowRt && rowRt === newRt) {
       return errorResponse(409, "invalid_request_error", `refresh_token already used by account #${row.id}`, "duplicate_account");
+    }
+    const rowApiKey = row.creds?.api_key?.trim();
+    if (newApiKey && rowApiKey && rowApiKey === newApiKey) {
+      return errorResponse(409, "invalid_request_error", `api_key already used by account #${row.id}`, "duplicate_account");
     }
     const rowSub = deriveIdentity(row.creds);
     if (newSub && rowSub && rowSub === newSub) {
