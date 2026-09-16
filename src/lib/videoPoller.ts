@@ -16,7 +16,8 @@ import { registry } from "../providers";
 import { getAccount, updateCreds } from "../db/accounts";
 import { listPendingJobs, markCompleted, markFailed, updateVideoJob, getVideoJob } from "../db/videoJobs";
 import { addApiKeyUsage } from "../db/apiKeys";
-import { emit, EV_VIDEO_STATUS } from "./events";
+import { updateRequestLog, getRequestLog } from "../db/logs";
+import { emit, EV_REQUEST_LOG, EV_VIDEO_STATUS } from "./events";
 import type { Account, Provider, VideoPollResult } from "../providers/types";
 
 // mp4s land here. Kept alongside the DB so a `rsync` of the project directory
@@ -123,6 +124,36 @@ async function downloadAndFinalize(
       // doesn't apply. Leave dollarCost null until a per-model rate lands.
       dollarCost: null,
     });
+
+    // Backfill the submit-time request_logs row with the final cost + render
+    // duration. Without this, the Requests view would show a 200ms row with
+    // no credit — the poller finishes minutes later and the row would look
+    // like a chat request that never billed. See project_video_generation.
+    if (job?.requestLogId) {
+      const submitRow = getRequestLog(job.requestLogId);
+      const submitAt = submitRow?.createdAt ? new Date(submitRow.createdAt).getTime() : Date.now();
+      updateRequestLog(job.requestLogId, {
+        completionTokens: tokensCharge,
+        creditUsed: result.credit ?? 0,
+        durationMs: Date.now() - submitAt,
+      });
+      // Re-emit request_log so the Requests page live-updates the row in place.
+      emit(EV_REQUEST_LOG, {
+        id: job.requestLogId,
+        provider: submitRow?.provider ?? "codebuddy",
+        model: submitRow?.model ?? null,
+        accountId: submitRow?.accountId ?? null,
+        accountLabel: submitRow?.accountLabel ?? null,
+        status: "success",
+        httpStatus: 200,
+        durationMs: Date.now() - submitAt,
+        promptTokens: submitRow?.promptTokens ?? null,
+        completionTokens: tokensCharge,
+        creditUsed: result.credit ?? 0,
+        errorMessage: null,
+        attempts: [],
+      });
+    }
     emit(EV_VIDEO_STATUS, videoEventPayload(jobId));
   } catch (err) {
     console.warn(`[videoPoller] download #${jobId} failed:`, err instanceof Error ? err.message : err);

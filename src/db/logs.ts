@@ -114,6 +114,64 @@ export function getRequestLog(id: number) {
   return db.select().from(requestLogs).where(eq(requestLogs.id, id)).get();
 }
 
+// Patch an existing row. Used by the video poller to fill in final cost +
+// duration after the async render finishes — the submit-time row starts with
+// only the HTTP round-trip timing and no usage numbers.
+export function updateRequestLog(
+  id: number,
+  patch: Partial<
+    Pick<
+      RequestLogInsert,
+      | "status"
+      | "outcome"
+      | "durationMs"
+      | "promptTokens"
+      | "completionTokens"
+      | "cachedTokens"
+      | "cacheWriteTokens"
+      | "reasoningTokens"
+      | "creditUsed"
+      | "dollarCost"
+      | "errorMessage"
+      | "responseBody"
+    >
+  >
+): boolean {
+  const set: Record<string, unknown> = {};
+  if (patch.status !== undefined) set.status = patch.status;
+  if (patch.outcome !== undefined) set.outcome = patch.outcome;
+  if (patch.durationMs !== undefined) set.durationMs = patch.durationMs;
+  if (patch.promptTokens !== undefined) set.promptTokens = patch.promptTokens;
+  if (patch.completionTokens !== undefined) set.completionTokens = patch.completionTokens;
+  if (patch.cachedTokens !== undefined) set.cachedTokens = patch.cachedTokens;
+  if (patch.cacheWriteTokens !== undefined) set.cacheWriteTokens = patch.cacheWriteTokens;
+  if (patch.reasoningTokens !== undefined) set.reasoningTokens = patch.reasoningTokens;
+  if (patch.creditUsed !== undefined) set.creditUsed = patch.creditUsed;
+  if (patch.dollarCost !== undefined) set.dollarCost = patch.dollarCost;
+  if (patch.errorMessage !== undefined) set.errorMessage = patch.errorMessage;
+  if (patch.responseBody !== undefined) set.responseBody = patch.responseBody;
+  // Recompute total_tokens if either token field was touched so the derived
+  // column stays consistent with the source ones.
+  if (patch.promptTokens !== undefined || patch.completionTokens !== undefined) {
+    const cur = db
+      .select({ p: requestLogs.promptTokens, c: requestLogs.completionTokens })
+      .from(requestLogs)
+      .where(eq(requestLogs.id, id))
+      .get();
+    const p = patch.promptTokens ?? cur?.p ?? 0;
+    const c = patch.completionTokens ?? cur?.c ?? 0;
+    set.totalTokens = p + c;
+  }
+  if (Object.keys(set).length === 0) return false;
+  const r = db
+    .update(requestLogs)
+    .set(set)
+    .where(eq(requestLogs.id, id))
+    .returning({ id: requestLogs.id })
+    .get();
+  return r !== undefined;
+}
+
 // ── Dashboard stats ──────────────────────────────────────────────
 
 export interface DashboardStats {

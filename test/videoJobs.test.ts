@@ -149,7 +149,14 @@ beforeAll(() => {
 afterAll(() => {
   globalThis.fetch = realFetch;
   delete process.env.HOST;
-  for (const id of createdJobIds) sqlite.exec(`DELETE FROM video_jobs WHERE id = ${id}`);
+  for (const id of createdJobIds) {
+    // Each job spawned a request_logs row via /v1/videos/generations. Drop
+    // it too so cross-file stats aggregations (e.g. api.test's /stats/models
+    // "top model" assertion) don't inherit our seedance-2.5 rows and out-vote
+    // the chat model that test expects at data[0].
+    sqlite.exec(`DELETE FROM request_logs WHERE provider = 'codebuddy' AND model = 'seedance-2.5'`);
+    sqlite.exec(`DELETE FROM video_jobs WHERE id = ${id}`);
+  }
   for (const id of createdKeyIds) sqlite.exec(`DELETE FROM api_keys WHERE id = ${id}`);
   for (const p of createdFiles) {
     if (existsSync(p)) {

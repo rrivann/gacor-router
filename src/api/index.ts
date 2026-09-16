@@ -361,7 +361,7 @@ api.post("/v1/videos/generations", async (c) => {
       accountId: account.id,
       accountLabel: account.label,
       stream: false,
-      source: "video-submit",
+      source: "video",
       status: "success",
       httpStatus: 200,
       outcome: "ok",
