@@ -1,6 +1,6 @@
 {
   "name": "gacor-router",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Personal AI gateway - OpenAI/Anthropic-compatible proxy with account pool",
   "license": "MIT",
   "repository": {

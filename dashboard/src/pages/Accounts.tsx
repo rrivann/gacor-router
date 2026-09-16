@@ -411,8 +411,25 @@ export default function Accounts() {
                 <tbody>
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">
-                        {loading ? "Loading…" : `No ${providerFilter} accounts found`}
+                      <td colSpan={8} className="px-4 py-12">
+                        {loading ? (
+                          <div className="text-center text-muted-foreground">Loading…</div>
+                        ) : (
+                          <div className="mx-auto max-w-md space-y-3 text-center">
+                            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+                              <Plus className="h-4 w-4" />
+                            </div>
+                            <div>
+                              <div className="text-sm font-medium">No {providerFilter} accounts yet</div>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Paste a refresh token (<code className="rounded bg-secondary px-1 py-0.5 text-[10px]">eyJ…</code>) or an api_key (<code className="rounded bg-secondary px-1 py-0.5 text-[10px]">ck_…</code>). Type auto-detected.
+                              </p>
+                            </div>
+                            <Button size="sm" onClick={() => { setAddProvider(providerFilter); setShowAdd(true); }}>
+                              <Plus className="h-4 w-4" /> Add {providerFilter} account
+                            </Button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )}
