@@ -10,8 +10,10 @@
 // logging tap and downstream scope checks can read it without another lookup.
 
 import type { MiddlewareHandler } from "hono";
+import { getCookie } from "hono/cookie";
 import { randomBytes } from "node:crypto";
 import { countApiKeys, getApiKeyBySecret, touchApiKeyLastUsed, type ApiKeyRow } from "../db/apiKeys";
+import { COOKIE_NAME, verifySessionCookie } from "./dashboardAuth";
 import { errorResponse } from "./http";
 
 // Cached count (few-second TTL) so the open-gateway check doesn't hit sqlite
@@ -108,6 +110,17 @@ export const apiKeyAuth: MiddlewareHandler = async (c, next) => {
   // Loopback bypass: the router is bound to loopback and this request came
   // from loopback → it's the local user, no key required.
   if (isLocalRequest(c)) {
+    await next();
+    return;
+  }
+
+  // Dashboard bypass: a valid session cookie means the request came from the
+  // dashboard SPA (Models page fetching /v1/models, Chat playground calling
+  // /v1/chat/completions, etc.). The dashboard has already been authenticated
+  // via password on the /api/* surface, so we trust it here too. Without this
+  // the dashboard would need to know its own API key just to render.
+  const sessionCookie = getCookie(c, COOKIE_NAME);
+  if (sessionCookie && (await verifySessionCookie(sessionCookie))) {
     await next();
     return;
   }

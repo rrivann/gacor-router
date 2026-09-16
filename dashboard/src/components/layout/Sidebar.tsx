@@ -56,7 +56,7 @@ const sections: { title: string; items: NavItem[] }[] = [
 export default function Sidebar() {
   const { theme, toggleTheme } = useTheme();
   const wsStatus = useWsStatus();
-  const { status: authStatus, refresh: refreshAuth } = useAuth();
+  const { status: authStatus } = useAuth();
   // No logout button on loopback (there's no cookie to clear — the user just
   // reaches the dashboard directly). On a public/tunnel URL the button is
   // meaningful because it clears the session cookie.
@@ -64,8 +64,11 @@ export default function Sidebar() {
 
   async function handleLogout() {
     try { await logout(); } catch {}
-    await refreshAuth();
-    // AuthGate will Navigate to /login on the next render.
+    // Hard reload to /login — the cleanest way to nuke every in-memory hook
+    // state (WebSocket, auth cache, react-router history) that was populated
+    // while the user was signed in. A soft navigate would leave stale data
+    // hanging around if any component captured it.
+    window.location.href = "/login";
   }
 
   const wsMeta =
