@@ -1,0 +1,25 @@
+[Unit]
+Description=Gacor Router - personal AI gateway
+Documentation=https://github.com/rrivann/gacor-router
+After=network.target
+
+[Service]
+Type=simple
+User=%INSTALL_USER%
+WorkingDirectory=%INSTALL_DIR%
+EnvironmentFile=-%INSTALL_DIR%/.env
+ExecStart=%BUN_PATH% run src/index.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Sandboxing - loosen if a downstream install needs more access.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%INSTALL_DIR%
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
