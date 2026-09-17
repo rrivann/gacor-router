@@ -14,8 +14,9 @@ import {
   Film,
   LogOut,
 } from "lucide-react";
-import { logout } from "../../lib/api";
+import { fetchVersion, logout } from "../../lib/api";
 import { useAuth } from "../../hooks/useAuth";
+import { useEffect, useState } from "react";
 import { cn } from "../../lib/utils";
 import { useTheme } from "../../hooks/useTheme";
 import { useWsStatus } from "../../hooks/useWebSocket";
@@ -57,6 +58,12 @@ export default function Sidebar() {
   const { theme, toggleTheme } = useTheme();
   const wsStatus = useWsStatus();
   const { status: authStatus } = useAuth();
+  // Fetch once on mount — /api/version is bootstrap-time constant, no reason
+  // to poll. Silently ignore failure (sidebar just shows "…" placeholder).
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    fetchVersion().then((r) => setVersion(r.version)).catch(() => {});
+  }, []);
   // No logout button on loopback (there's no cookie to clear — the user just
   // reaches the dashboard directly). On a public/tunnel URL the button is
   // meaningful because it clears the session cookie.
@@ -84,7 +91,14 @@ export default function Sidebar() {
       <div className="flex items-center gap-2 border-b border-sidebar-border px-4 py-4">
         <img src="/favicon.svg" alt="Gacor-Router" className="h-8 w-8 rounded-lg" />
         <div className="min-w-0">
-          <div className="truncate text-sm font-bold">Gacor-Router</div>
+          <div className="flex items-baseline gap-1.5">
+            <span className="truncate text-sm font-bold">Gacor-Router</span>
+            {version && (
+              <span className="shrink-0 text-[10px] font-medium text-muted-foreground tabular-nums">
+                v{version}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
             <span
               className="inline-block h-1.5 w-1.5 rounded-full"

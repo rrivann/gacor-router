@@ -396,6 +396,10 @@ export interface DebugProcess {
 
 export const fetchDebugProcess = () => fetchApi<DebugProcess>("/api/debug/process");
 
+// Build info — read from package.json at server boot. Public route (no
+// session cookie required) so the sidebar can display it before login.
+export const fetchVersion = () => fetchApi<{ version: string }>("/api/version");
+
 // ── Dashboard auth ───────────────────────────────────────────────
 
 export interface AuthStatus {

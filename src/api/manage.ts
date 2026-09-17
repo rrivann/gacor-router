@@ -78,6 +78,15 @@ export const manage = new Hono();
 // ── Dashboard auth (registered FIRST so /api/auth/* is reachable without a
 // session cookie — the gate below wraps everything else) ─────────────────
 
+// Static build info. Read once from package.json at boot so the endpoint
+// itself is a hot lookup — a fresh install adds a couple of KB to the
+// server's resident set but no per-request I/O.
+import pkg from "../../package.json" with { type: "json" };
+const BUILD_VERSION = (pkg as { version?: string }).version ?? "0.0.0";
+
+// Public — the sidebar polls this on mount to show the running version.
+manage.get("/version", (c) => c.json({ version: BUILD_VERSION }));
+
 // Report auth state so the SPA can decide whether to redirect to /login,
 // show a "set a password" prompt, or render normally.
 manage.get("/auth/status", async (c) => {
