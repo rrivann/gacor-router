@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowRight, Filter as FilterIcon, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Alert } from "../components/ui/Alert";
 import {
   createFilter,
   deleteFilter,
@@ -135,24 +137,19 @@ export default function Filters() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Filters</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Rewrite outbound message text before it reaches the provider
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={load}>
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </Button>
-      </div>
+      <PageHeader
+        icon={FilterIcon}
+        title="Filters"
+        subtitle="Rewrite outbound message text before it reaches the provider"
+        actions={
+          <Button variant="outline" size="sm" onClick={load}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </Button>
+        }
+      />
 
-      {error && (
-        <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">{error}</div>
-      )}
-      {message && !error && (
-        <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">{message}</div>
-      )}
+      {error && <Alert variant="error">{error}</Alert>}
+      {message && !error && <Alert variant="success">{message}</Alert>}
 
       <Card className="p-4">
         <div className="mb-3 text-sm font-medium">Add rule</div>

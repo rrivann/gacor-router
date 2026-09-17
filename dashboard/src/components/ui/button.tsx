@@ -27,8 +27,13 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors",
-        "disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ring",
+        // Motion: `transition-all` picks up color, transform and shadow so the
+        // active-scale press is visible; `active:scale-[0.97]` is 9router's
+        // tactile press. focus-visible ring uses the semantic --ring token.
+        "inline-flex items-center justify-center gap-1.5 rounded-md font-medium",
+        "transition-all duration-150 ease-out active:scale-[0.97]",
+        "disabled:pointer-events-none disabled:opacity-50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         variants[variant],
         sizes[size],
         className

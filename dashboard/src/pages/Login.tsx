@@ -10,6 +10,7 @@ import { KeyRound, Loader2 } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Alert } from "../components/ui/Alert";
 import { login } from "../lib/api";
 import { useAuth } from "../hooks/useAuth";
 
@@ -54,22 +55,22 @@ export default function Login() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-sm p-6">
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-primary/15 p-2.5 text-primary">
-            <KeyRound className="h-5 w-5" />
+      <Card className="w-full max-w-sm p-6 shadow-[var(--shadow-overlay)] animate-zoom-in">
+        <div className="flex flex-col items-center text-center">
+          {/* Prominent icon halo — etteum Login pattern. Centered, larger
+              than a header icon so the sign-in screen has a clear focal point. */}
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <KeyRound className="h-6 w-6" />
           </div>
-          <div>
-            <h1 className="text-lg font-bold">Gacor Router</h1>
-            <p className="text-xs text-muted-foreground">Sign in to the dashboard</p>
-          </div>
+          <h1 className="mt-4 text-lg font-bold">Gacor Router</h1>
+          <p className="text-xs text-muted-foreground">Sign in to the dashboard</p>
         </div>
 
         {status?.needsPassword && (
-          <div className="mt-5 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <Alert variant="warning" className="mt-5 text-xs">
             First login — the default password is <code className="font-mono">123456</code>.
             You'll be asked to change it right after.
-          </div>
+          </Alert>
         )}
 
         <form onSubmit={submit} className="mt-5 space-y-3">
@@ -86,9 +87,9 @@ export default function Login() {
           </label>
 
           {error && (
-            <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
+            <Alert variant="error" className="text-xs">
               {error}
-            </div>
+            </Alert>
           )}
 
           <Button type="submit" className="w-full" disabled={busy || !password}>
@@ -97,7 +98,7 @@ export default function Login() {
           </Button>
         </form>
 
-        <p className="mt-4 text-[10px] text-muted-foreground">
+        <p className="mt-4 text-center text-[10px] text-muted-foreground">
           Forgot password? SSH to the VPS and run{" "}
           <code className="rounded bg-secondary px-1 py-0.5 font-mono">bun run scripts/reset-password.ts &lt;new&gt;</code>
         </p>

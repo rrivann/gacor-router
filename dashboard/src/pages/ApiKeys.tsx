@@ -14,6 +14,8 @@ import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Dialog } from "../components/ui/dialog";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Alert } from "../components/ui/Alert";
 import {
   createApiKey,
   deleteApiKey,
@@ -126,32 +128,29 @@ export default function ApiKeys() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">API Keys</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+      <PageHeader
+        icon={KeyRound}
+        title="API Keys"
+        subtitle={
+          <>
             Tokens clients send in <code className="rounded bg-secondary px-1 py-0.5 text-xs">Authorization: Bearer …</code> to
             /v1/*. Loopback + fresh installs auto-bypass.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={load}>
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
-          <Button size="sm" onClick={() => setAddOpen(true)}>
-            <Plus className="h-4 w-4" /> New key
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={load}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="h-4 w-4" /> New key
+            </Button>
+          </>
+        }
+      />
 
-      {error && (
-        <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">{error}</div>
-      )}
-      {message && !error && (
-        <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
-          {message}
-        </div>
-      )}
+      {error && <Alert variant="error">{error}</Alert>}
+      {message && !error && <Alert variant="success">{message}</Alert>}
 
       <Card>
         {!rows ? (
@@ -194,7 +193,7 @@ export default function ApiKeys() {
                     <tr
                       key={k.id}
                       className={cn(
-                        "border-b border-border/60 last:border-0 hover:bg-secondary/40",
+                        "border-b border-border/60 last:border-0 transition-colors hover:bg-secondary/70",
                         (!k.enabled || expired || quotaHit) && "opacity-60"
                       )}
                     >

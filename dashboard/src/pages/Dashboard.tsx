@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Users, Activity, CheckCircle, Zap, CircleAlert, Ban } from "lucide-react";
+import { Users, Activity, CheckCircle, Zap, CircleAlert, Ban, LayoutDashboard } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Skeleton } from "../components/ui/Skeleton";
 import { TokenUsage } from "../components/dashboard/TokenUsage";
 import { fetchDashboardStats, type DashboardStats } from "../lib/api";
 import { cn, formatTokens } from "../lib/utils";
@@ -65,14 +67,15 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Pool status at a glance</p>
-      </div>
+      <PageHeader icon={LayoutDashboard} title="Dashboard" subtitle="Pool status at a glance" />
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {cards.map((c) => (
+        {stats === null &&
+          Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        {stats !== null && cards.map((c) => (
           <Card key={c.label} className="group transition-all hover:border-primary/40">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
@@ -105,7 +108,18 @@ export default function Dashboard() {
             { label: "Exhausted", value: stats?.pool.exhausted ?? 0, icon: CircleAlert, tone: "text-warning" },
             { label: "Banned", value: stats?.pool.banned ?? 0, icon: Ban, tone: "text-error" },
           ].map((row) => (
-            <div key={row.label} className="flex items-center justify-between rounded-lg border border-border bg-background p-3 text-sm">
+            <div
+              key={row.label}
+              className={cn(
+                // Row now uses the tone color as an accent — border + subtle
+                // background wash matching its meaning (active=success, etc.).
+                // Removes the three-identical-grey-boxes feeling from the audit.
+                "flex items-center justify-between rounded-lg border p-3 text-sm transition-colors",
+                row.tone === "text-success" && "border-success/20 bg-success/[0.04]",
+                row.tone === "text-warning" && "border-warning/20 bg-warning/[0.04]",
+                row.tone === "text-error" && "border-error/20 bg-error/[0.04]"
+              )}
+            >
               <span className="flex items-center gap-2 text-secondary-foreground">
                 <row.icon className={cn("h-4 w-4", row.tone)} />
                 {row.label}

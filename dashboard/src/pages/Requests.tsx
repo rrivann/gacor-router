@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, Search, X } from "lucide-react";
+import { Activity, RefreshCw, Search, X } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input, Select } from "../components/ui/input";
+import { PageHeader } from "../components/ui/PageHeader";
+import { EmptyState } from "../components/ui/EmptyState";
 import {
   fetchRequestDetail,
   fetchRequestLogs,
@@ -104,17 +106,16 @@ export default function Requests() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Requests</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Live request log — new entries appear as they finish
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </Button>
-      </div>
+      <PageHeader
+        icon={Activity}
+        title="Requests"
+        subtitle="Live request log — new entries appear as they finish"
+        actions={
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </Button>
+        }
+      />
 
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1">
@@ -157,8 +158,17 @@ export default function Requests() {
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">
-                    {loading ? "Loading…" : "No requests yet"}
+                  <td colSpan={11} className="p-6">
+                    {loading ? (
+                      <div className="text-center text-muted-foreground">Loading…</div>
+                    ) : (
+                      <EmptyState
+                        icon={Activity}
+                        title="No requests yet"
+                        hint="Traffic will appear here as clients hit /v1/*"
+                        variant="dashed"
+                      />
+                    )}
                   </td>
                 </tr>
               )}
@@ -166,7 +176,7 @@ export default function Requests() {
                 <tr
                   key={l.id}
                   onClick={() => openDetail(l)}
-                  className="cursor-pointer border-b border-border/60 last:border-0 hover:bg-secondary/40"
+                  className="cursor-pointer border-b border-border/60 last:border-0 transition-colors hover:bg-secondary/70"
                   title={l.errorMessage ?? undefined}
                 >
                   <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
@@ -228,11 +238,12 @@ export default function Requests() {
         </div>
       </Card>
 
-      {/* Detail drawer */}
+      {/* Detail drawer — slides in from the right on open, floats above the
+          page with the overlay shadow (deeper than a card). */}
       {selected && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/60" onClick={() => setSelected(null)}>
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 animate-fade-in" onClick={() => setSelected(null)}>
           <div
-            className="h-full w-full max-w-2xl overflow-y-auto border-l border-border bg-card p-5"
+            className="h-full w-full max-w-2xl overflow-y-auto border-l border-border bg-card p-5 shadow-[var(--shadow-overlay)] animate-slide-in-right"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-4 flex items-start justify-between">

@@ -20,6 +20,11 @@ export function useTheme() {
   }, [theme]);
 
   const toggleTheme = useCallback(() => {
+    // Add a scoped transition class for ~300ms so the whole page eases
+    // between palettes instead of snapping. Removed right after so nothing
+    // else in the app stays saddled with a global `transition: all`.
+    document.body.classList.add("theme-transition");
+    window.setTimeout(() => document.body.classList.remove("theme-transition"), 300);
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }, []);
 

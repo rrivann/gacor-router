@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Eye, EyeOff, Plus, RefreshCw, Search, Trash2, Copy, Check, ArrowLeft, Flame, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Plus, RefreshCw, Search, Trash2, Copy, Check, ArrowLeft, Flame, Loader2, Users } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input, Textarea } from "../components/ui/input";
 import { Dialog } from "../components/ui/dialog";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Alert } from "../components/ui/Alert";
 import {
   createAccount,
   deleteAccount,
@@ -288,20 +290,17 @@ export default function Accounts() {
   return (
     <div className="space-y-6">
       {providerFilter === "all" ? (
-        /* ── Landing: page header + provider cards ── */
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Accounts</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Upstream credentials in the pool
-            </p>
-          </div>
-          <div className="flex gap-2">
+        /* ── Landing: shared PageHeader with icon-in-halo ── */
+        <PageHeader
+          icon={Users}
+          title="Accounts"
+          subtitle="Upstream credentials in the pool"
+          actions={
             <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={loading}>
               <RefreshCw className="h-4 w-4" /> Refresh
             </Button>
-          </div>
-        </div>
+          }
+        />
       ) : (
         /* ── Drill-down: breadcrumb header ala enowx/etteum ── */
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -339,16 +338,8 @@ export default function Accounts() {
         </div>
       )}
 
-      {message && (
-        <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
-          {message}
-        </div>
-      )}
-      {error && (
-        <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
-          {error}
-        </div>
-      )}
+      {message && <Alert variant="success">{message}</Alert>}
+      {error && <Alert variant="error">{error}</Alert>}
 
       {providerFilter === "all" ? (
         /* Provider summary cards (click drills in, gear toggles rotation).
@@ -447,7 +438,7 @@ export default function Accounts() {
                     </tr>
                   )}
                   {filtered.map((a, i) => (
-                    <tr key={a.id} className="border-b border-border/60 last:border-0 hover:bg-secondary/40">
+                    <tr key={a.id} className="border-b border-border/60 last:border-0 transition-colors hover:bg-secondary/70">
                   <td className="px-4 py-2.5 tabular-nums text-muted-foreground" title={`db id ${a.id}`}>{i + 1}</td>
                   <td className="px-4 py-2.5 font-medium">{a.provider}</td>
                   <td className="px-4 py-2.5">{a.label ?? "—"}</td>

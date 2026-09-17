@@ -3,6 +3,8 @@ import { Check, Copy, Globe, Loader2, Power, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Alert } from "../components/ui/Alert";
 import {
   disableTunnel,
   enableTunnel,
@@ -89,20 +91,15 @@ export default function Tunnel() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Tunnel</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Expose this router publicly via a Cloudflare quick tunnel — no account needed
-        </p>
-      </div>
+      <PageHeader
+        icon={Globe}
+        title="Tunnel"
+        subtitle="Expose this router publicly via a Cloudflare quick tunnel — no account needed"
+      />
 
-      {error && (
-        <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">{error}</div>
-      )}
+      {error && <Alert variant="error">{error}</Alert>}
       {status?.download.error && (
-        <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
-          cloudflared download failed: {status.download.error}
-        </div>
+        <Alert variant="error">cloudflared download failed: {status.download.error}</Alert>
       )}
 
       <Card>

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, RefreshCw, Search } from "lucide-react";
+import { Check, Copy, Cpu, RefreshCw, Search } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Alert } from "../components/ui/Alert";
 import { fetchModels, type ModelInfo } from "../lib/api";
 import { cn, formatTokens } from "../lib/utils";
 
@@ -89,22 +91,18 @@ export default function Models() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Models</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {models.length} models available across {providers.length}{" "}
-            {providers.length === 1 ? "provider" : "providers"}
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </Button>
-      </div>
+      <PageHeader
+        icon={Cpu}
+        title="Models"
+        subtitle={`${models.length} models available across ${providers.length} ${providers.length === 1 ? "provider" : "providers"}`}
+        actions={
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </Button>
+        }
+      />
 
-      {error && (
-        <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">{error}</div>
-      )}
+      {error && <Alert variant="error">{error}</Alert>}
 
       {/* Free-promo models (0x credits) — from the official catalogue */}
       <div className="rounded-lg border border-success/30 bg-success/5 px-4 py-3">

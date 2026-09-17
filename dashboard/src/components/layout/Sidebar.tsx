@@ -88,7 +88,7 @@ export default function Sidebar() {
           <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
             <span
               className="inline-block h-1.5 w-1.5 rounded-full"
-              style={{ background: wsMeta.color }}
+              style={{ background: wsMeta.color, boxShadow: `0 0 6px ${wsMeta.color}` }}
             />
             {wsMeta.label}
           </div>
@@ -110,15 +110,25 @@ export default function Sidebar() {
                   end={item.path === "/"}
                   className={({ isActive }) =>
                     cn(
-                      "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                      // `relative` anchors the left-rail accent for the
+                      // active state so the current page announces itself
+                      // beyond just a tint (audit callout: sidebar sameness).
+                      "relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors",
                       isActive
                         ? "bg-primary/15 font-medium text-primary"
                         : "text-secondary-foreground hover:bg-secondary hover:text-foreground"
                     )
                   }
                 >
-                  <item.icon className="h-4 w-4 shrink-0" />
-                  {item.label}
+                  {({ isActive }) => (
+                    <>
+                      {isActive && (
+                        <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" />
+                      )}
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      {item.label}
+                    </>
+                  )}
                 </NavLink>
               ))}
             </div>

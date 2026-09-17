@@ -30,12 +30,15 @@ export function Dialog({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 animate-fade-in"
       onClick={onClose}
     >
       <div
         className={cn(
-          "w-full max-w-lg rounded-lg border border-border bg-card shadow-[var(--shadow-card)]",
+          // Upgraded shadow — dialog now sits above cards/popovers instead of
+          // sharing the same flat --shadow-card. Enter animation is a subtle
+          // zoom+fade (200ms) so the modal doesn't just pop in.
+          "w-full max-w-lg rounded-lg border border-border bg-card shadow-[var(--shadow-overlay)] animate-zoom-in",
           className
         )}
         onClick={(e) => e.stopPropagation()}

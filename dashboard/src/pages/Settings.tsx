@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { KeyRound, Loader2, Plus, RefreshCw, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Alert } from "../components/ui/Alert";
 import { changePassword, deleteSetting, fetchSettings, saveSettings } from "../lib/api";
 import { useTimedMessage } from "../hooks/useTimedMessage";
 import { useAuth } from "../hooks/useAuth";
@@ -80,24 +82,19 @@ export default function Settings() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Settings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Router key-value configuration</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </Button>
-      </div>
+      <PageHeader
+        icon={SettingsIcon}
+        title="Settings"
+        subtitle="Router key-value configuration"
+        actions={
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </Button>
+        }
+      />
 
-      {message && (
-        <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
-          {message}
-        </div>
-      )}
-      {error && (
-        <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">{error}</div>
-      )}
+      {message && <Alert variant="success">{message}</Alert>}
+      {error && <Alert variant="error">{error}</Alert>}
 
       <Card>
         <CardHeader>
