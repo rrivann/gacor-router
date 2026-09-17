@@ -264,7 +264,12 @@ export const deleteSetting = (key: string) =>
 // ── Tunnel ───────────────────────────────────────────────────────
 
 export interface TunnelStatus {
+  // Backend-computed liveness (settingsEnabled && running). The dashboard
+  // shows "online" only when this is true.
   enabled: boolean;
+  // User's stored intent — true even when the process is dead so we can
+  // render a "disconnected" state distinct from "turned off".
+  settingsEnabled: boolean;
   running: boolean;
   url: string | null;
   enabling: boolean;

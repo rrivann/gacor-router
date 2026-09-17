@@ -1,7 +1,10 @@
 // Pure-function tests for cloudflared log parsing — no binary, no process.
+// Also covers the PID helper used to make isCloudflaredRunning() survive a
+// backend restart.
 
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { parseQuickTunnelUrl } from "../src/tunnel/cloudflared";
+import { clearPid, isPidAlive, loadPid, savePid } from "../src/tunnel/pid";
 
 const SAMPLE_LOG = `
 2026-09-14T10:00:00Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick tunnel.
@@ -33,4 +36,35 @@ test("prefers the last URL when the log carries several", () => {
 
 test("handles uppercase host characters case-insensitively", () => {
   expect(parseQuickTunnelUrl("HTTPS://ABC-DEF.trycloudflare.com")).toBe("https://abc-def.trycloudflare.com");
+});
+
+// ── PID helper ────────────────────────────────────────────────────
+// These write to ~/.gacor-router/tunnel/cloudflared.pid — the same file the
+// real spawner uses — so run cleanup after the block. A dev machine that
+// happens to have a live tunnel would see its PID file recreated on next
+// enable, so this is safe.
+
+afterAll(() => clearPid());
+
+test("savePid → loadPid round-trip", () => {
+  savePid(12345);
+  expect(loadPid()).toBe(12345);
+});
+
+test("clearPid removes the file and is idempotent when absent", () => {
+  savePid(42);
+  clearPid();
+  expect(loadPid()).toBeNull();
+  // A second clear on an already-absent file must not throw.
+  clearPid();
+  expect(loadPid()).toBeNull();
+});
+
+test("isPidAlive reports true for the current process", () => {
+  expect(isPidAlive(process.pid)).toBe(true);
+});
+
+test("isPidAlive reports false for a very high fictional pid", () => {
+  // 2^31 - 1: high enough that no real process should own it on any OS.
+  expect(isPidAlive(2147483646)).toBe(false);
 });

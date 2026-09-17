@@ -86,8 +86,15 @@ export default function Tunnel() {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  // Backend now guarantees `enabled` is only true when the process is
+  // actually up (see getTunnelStatus). Coupling the URL check here is
+  // belt-and-suspenders — the backend also nulls a stale URL in that case.
   const active = status?.enabled && status?.url;
   const working = busy || status?.enabling || status?.download.downloading;
+  // User intent was "on" but cloudflared isn't alive (crash, backend
+  // restart, network-driven exit). Distinct from user-off so we can prompt
+  // reconnection instead of silently rendering offline.
+  const crashed = !!status && status.settingsEnabled && !status.running && !working;
 
   return (
     <div className="space-y-6">
@@ -100,6 +107,11 @@ export default function Tunnel() {
       {error && <Alert variant="error">{error}</Alert>}
       {status?.download.error && (
         <Alert variant="error">cloudflared download failed: {status.download.error}</Alert>
+      )}
+      {crashed && (
+        <Alert variant="warning">
+          Tunnel disconnected — cloudflared is no longer running. Click <span className="font-medium">Enable Tunnel</span> to reconnect.
+        </Alert>
       )}
 
       <Card>
@@ -117,8 +129,8 @@ export default function Tunnel() {
               <div>
                 <CardTitle className="flex items-center gap-2">
                   Public Access
-                  <Badge variant={active ? "success" : "secondary"}>
-                    {working ? "working" : active ? "online" : "offline"}
+                  <Badge variant={active ? "success" : crashed ? "error" : "secondary"}>
+                    {working ? "working" : active ? "online" : crashed ? "disconnected" : "offline"}
                   </Badge>
                 </CardTitle>
                 <CardDescription>

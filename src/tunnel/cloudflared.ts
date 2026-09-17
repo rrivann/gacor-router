@@ -4,9 +4,10 @@
 // yield a https://<random>.trycloudflare.com URL pointing at the local port.
 
 import { spawn, type Subprocess } from "bun";
-import { mkdirSync, chmodSync, statSync } from "node:fs";
+import { mkdirSync, chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform, arch, tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearPid, isPidAlive, loadPid, savePid } from "./pid";
 
 const BIN_DIR = join(homedir(), ".gacor-router", "bin");
 const BIN_NAME = platform() === "win32" ? "cloudflared.exe" : "cloudflared";
@@ -120,8 +121,28 @@ export function setUnexpectedExitHandler(handler: (() => void) | null): void {
   onUnexpectedExit = handler;
 }
 
+// Test seam: the API test uses a stub spawner that never sets `child`,
+// so isCloudflaredRunning() would return false and the coherent-status
+// gate would collapse `enabled` to false. Setting the override lets a
+// test simulate "cloudflared alive" without actually spawning one.
+let runningOverride: (() => boolean) | null = null;
+export function setRunningOverrideForTests(fn: (() => boolean) | null): void {
+  runningOverride = fn;
+}
+
 export function isCloudflaredRunning(): boolean {
-  return child !== null && child.exitCode === null;
+  if (runningOverride) return runningOverride();
+  // Fast path: we spawned it in this process and it's still up.
+  if (child !== null && child.exitCode === null) return true;
+  // Persisted path: a previous backend instance spawned it (systemd unit
+  // stayed up while our own process restarted). Signal-0 probe reveals
+  // whether the pid still exists.
+  const pid = loadPid();
+  if (pid && isPidAlive(pid)) return true;
+  // Stale PID file (process crashed while we were down) — clear it so a
+  // future call doesn't keep re-probing a dead pid.
+  if (pid) clearPid();
+  return false;
 }
 
 export interface QuickTunnel {
@@ -149,19 +170,48 @@ export function spawnQuickTunnel(localPort: number): Promise<QuickTunnel> {
   return ensureCloudflared().then(
     (bin) =>
       new Promise<QuickTunnel>((resolve, reject) => {
+        // Isolated config dir avoids picking up a user's ~/.cloudflared/config.yml
+        // (would otherwise turn a quick tunnel into an authenticated one).
+        // Cleaned up in the exit handler + on kill.
+        const configDir = mkdtempSync(join(tmpdir(), "gacor-cf-"));
+        const configPath = join(configDir, "config.yml");
+        writeFileSync(configPath, "# gacor quick-tunnel placeholder\n");
+
+        // --retries 99 keeps the tunnel alive across brief edge disconnects
+        // (cloudflared handles the re-handshake internally, URL stays valid).
         const proc = spawn({
-          cmd: [bin, "tunnel", "--url", `http://127.0.0.1:${localPort}`, "--no-autoupdate"],
+          cmd: [
+            bin,
+            "tunnel",
+            "--url",
+            `http://127.0.0.1:${localPort}`,
+            "--config",
+            configPath,
+            "--no-autoupdate",
+            "--retries",
+            "99",
+          ],
           stdout: "pipe",
           stderr: "pipe",
         });
         child = proc;
+        if (typeof proc.pid === "number") savePid(proc.pid);
+
+        const cleanupConfig = () => {
+          try {
+            rmSync(configDir, { recursive: true, force: true });
+          } catch {
+            // Best-effort — the OS will reap tmp eventually.
+          }
+        };
 
         let settled = false;
         let logTail = "";
         const timeout = setTimeout(() => {
           if (settled) return;
           settled = true;
-          killCloudflared();
+          killCloudflared(localPort);
+          cleanupConfig();
           reject(new Error(`quick tunnel timed out. Last log: ${logTail.slice(-600) || "(empty)"}`));
         }, 90_000);
 
@@ -193,6 +243,8 @@ export function spawnQuickTunnel(localPort: number): Promise<QuickTunnel> {
 
         proc.exited.then((code) => {
           child = null;
+          clearPid();
+          cleanupConfig();
           const wasSettled = settled;
           if (!settled) {
             settled = true;
@@ -218,10 +270,39 @@ export function spawnQuickTunnel(localPort: number): Promise<QuickTunnel> {
   );
 }
 
-export function killCloudflared(): void {
+// Best-effort orphan reaper: after a backend restart, our in-memory `child`
+// is null but a cloudflared spawned by the previous instance may still be
+// bound to the same local port. pkill -f targets exactly those, with a
+// port-boundary check so :7788 doesn't also nuke :77880 or :17788.
+function killOrphansByPort(localPort: number): void {
+  if (platform() === "win32") return; // no orphans on our target VPS
+  try {
+    Bun.spawnSync({
+      cmd: ["pkill", "-f", `cloudflared.*:${localPort}([^0-9]|$)`],
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  } catch {
+    // pkill missing / no match — both are fine, we've done what we can.
+  }
+}
+
+export function killCloudflared(localPort?: number): void {
   if (child && child.exitCode === null) {
     intentionalKill = true;
     child.kill();
   }
   child = null;
+  // PID-file kill: covers "backend restarted, we lost the child ref but the
+  // cloudflared process is still up under init".
+  const pid = loadPid();
+  if (pid) {
+    try {
+      process.kill(pid);
+    } catch {
+      // Already dead / permission-denied — either way, drop the stale file.
+    }
+    clearPid();
+  }
+  if (typeof localPort === "number") killOrphansByPort(localPort);
 }

@@ -115,6 +115,7 @@ const { manage } = await import("../src/api/manage");
 const { setSetting } = await import("../src/db/accounts");
 const { onEvent } = await import("../src/lib/events");
 const { setSpawnerForTests } = await import("../src/tunnel/manager");
+const { setRunningOverrideForTests } = await import("../src/tunnel/cloudflared");
 // The bun-sqlite singleton — whichever test file loaded first binds it. Use
 // it for direct schema pokes so writes hit the DB the app actually reads.
 const { sqlite: liveDb } = await import("../src/db/index");
@@ -643,9 +644,13 @@ test("GET /api/stats/models groups usage by model", async () => {
 
 test("tunnel enable persists URL and status reflects it", async () => {
   setSpawnerForTests(async () => ({ url: "https://test-tunnel-abc.trycloudflare.com" }));
+  // Stub spawner never actually starts cloudflared, so the coherent-status
+  // gate would collapse `enabled` to false. Fake liveness so we can assert
+  // the happy path here; a dedicated test below covers the dead-process case.
+  setRunningOverrideForTests(() => true);
 
   const before = await (await manage.request("/tunnel/status")).json();
-  expect(before.enabled).toBe(false);
+  expect(before.enabled).toBe(false); // settings still off before enable
 
   const r = await manage.request("/tunnel/enable", { method: "POST" });
   expect(r.status).toBe(200);
@@ -655,8 +660,33 @@ test("tunnel enable persists URL and status reflects it", async () => {
 
   const status = await (await manage.request("/tunnel/status")).json();
   expect(status.enabled).toBe(true);
+  expect(status.settingsEnabled).toBe(true);
+  expect(status.running).toBe(true);
   expect(status.url).toBe("https://test-tunnel-abc.trycloudflare.com");
   expect(status.enabling).toBe(false);
+
+  setRunningOverrideForTests(null);
+});
+
+test("status reports disconnected when settings say enabled but cloudflared is dead", async () => {
+  // Set up: enable with fake liveness so URL persists.
+  setSpawnerForTests(async () => ({ url: "https://coherent-abc.trycloudflare.com" }));
+  setRunningOverrideForTests(() => true);
+  await manage.request("/tunnel/enable", { method: "POST" });
+
+  // Simulate the screenshot bug: cloudflared has since died.
+  setRunningOverrideForTests(() => false);
+
+  const status = await (await manage.request("/tunnel/status")).json();
+  // The coherent contract: user's intent is preserved, but `enabled` reflects
+  // the actual liveness, and the stale URL is hidden so the dashboard cannot
+  // render a dead https://... as ONLINE.
+  expect(status.settingsEnabled).toBe(true);
+  expect(status.running).toBe(false);
+  expect(status.enabled).toBe(false);
+  expect(status.url).toBeNull();
+
+  setRunningOverrideForTests(null);
 });
 
 test("concurrent enables join the same spawn", async () => {

@@ -10,6 +10,7 @@ import { manage } from "./api/manage";
 import { onEvent } from "./lib/events";
 import { startAutoWarmScheduler } from "./lib/autowarm";
 import { startVideoPoller } from "./lib/videoPoller";
+import { reconcileTunnel } from "./tunnel/manager";
 
 const app = new Hono();
 
@@ -96,3 +97,8 @@ startAutoWarmScheduler();
 // Background video poller: drives every queued/in_progress video_jobs row to
 // a terminal state (downloads the mp4 to ./videos on completion). Unref'd.
 startVideoPoller();
+
+// Coherence sweep: if the previous process left "tunnel enabled" in settings
+// but cloudflared is not actually alive, wipe the stale URL so the dashboard
+// doesn't render a dead https://…trycloudflare.com as ONLINE.
+reconcileTunnel();
