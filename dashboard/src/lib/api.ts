@@ -154,6 +154,12 @@ export const createAccount = (row: {
 export const deleteAccount = (id: number) =>
   fetchApi<{ success: boolean }>(`/api/accounts/${id}`, { method: "DELETE" });
 
+export const deleteAccountsBulk = (ids: number[]) =>
+  fetchApi<{ success: boolean; deleted: number; failed: number[] }>("/api/accounts/delete-bulk", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });
+
 export const revealAccount = (id: number) =>
   fetchApi<{ id: number; secret: string; creds: Record<string, string> }>(`/api/accounts/${id}/reveal`);
 

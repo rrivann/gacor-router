@@ -402,6 +402,54 @@ test("POST /api/accounts creates, reveal returns the secret, delete removes", as
   expect((await manage.request(`/accounts/${id}/reveal`)).status).toBe(404);
 });
 
+test("POST /api/accounts/delete-bulk removes many and reports missing ids", async () => {
+  // Seed three throwaway accounts so we can watch the batch tick down.
+  const ids: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    const r = await manage.request("/accounts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "codebuddy", label: `bulk-${i}`, secret: `tok-bulk-${i}-${Bun.randomUUIDv7()}` }),
+    });
+    expect(r.status).toBe(201);
+    ids.push((await r.json()).id as number);
+  }
+
+  // Include a bogus id so we can assert the batch keeps going + surfaces it.
+  const missing = 987654321;
+  const res = await manage.request("/accounts/delete-bulk", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [...ids, missing] }),
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.success).toBe(true);
+  expect(body.deleted).toBe(3);
+  expect(body.failed).toEqual([missing]);
+
+  // Every seeded id should now be gone.
+  for (const id of ids) {
+    expect((await manage.request(`/accounts/${id}/reveal`)).status).toBe(404);
+  }
+});
+
+test("POST /api/accounts/delete-bulk rejects empty and malformed payloads", async () => {
+  const noBody = await manage.request("/accounts/delete-bulk", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  expect(noBody.status).toBe(400);
+
+  const emptyArr = await manage.request("/accounts/delete-bulk", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [] }),
+  });
+  expect(emptyArr.status).toBe(400);
+});
+
 test("POST /api/accounts accepts creds.api_key credential (ck_ prefix)", async () => {
   const secret = "ck_test_" + Bun.randomUUIDv7();
   const created = await manage.request("/accounts", {

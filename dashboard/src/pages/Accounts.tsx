@@ -11,6 +11,7 @@ import { Alert } from "../components/ui/Alert";
 import {
   createAccount,
   deleteAccount,
+  deleteAccountsBulk,
   fetchAccounts,
   fetchSettings,
   revealAccount,
@@ -66,6 +67,12 @@ export default function Accounts() {
   const [copied, setCopied] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; label: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Bulk selection lives per drill-down. Reset whenever the provider or the
+  // status filter changes (a row that scrolled out of view shouldn't stay
+  // silently checked and get nuked in the next Delete Selected click).
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState<null | { ids: number[]; kind: "selected" | "filtered" }>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [retryingProvider, setRetryingProvider] = useState<Record<string, boolean>>({});
   const [warmingProvider, setWarmingProvider] = useState<Record<string, boolean>>({});
 
@@ -90,6 +97,12 @@ export default function Accounts() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Reset selection whenever the drill-down / filter narrows: a checked row
+  // that no longer renders would otherwise be an invisible time-bomb.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [providerFilter, statusFilter]);
 
   useWsEvent("account_status", () => load());
 
@@ -160,6 +173,46 @@ export default function Accounts() {
       fail(err);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  function toggleSelectAll() {
+    // "All" here means "everything currently visible in the table" so the
+    // action is bounded by the pill + search — never surprises the user with
+    // a nuke of rows that scrolled off.
+    setSelectedIds((prev) => {
+      const visible = filtered.map((a) => a.id);
+      const allSelected = visible.length > 0 && visible.every((id) => prev.has(id));
+      return new Set(allSelected ? [] : visible);
+    });
+  }
+
+  function toggleRow(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function confirmBulkDelete() {
+    if (!bulkDeleteOpen) return;
+    setBulkDeleting(true);
+    try {
+      const r = await deleteAccountsBulk(bulkDeleteOpen.ids);
+      if (r.failed.length > 0) {
+        ok(`Deleted ${r.deleted}/${bulkDeleteOpen.ids.length} — ${r.failed.length} not found`);
+      } else {
+        ok(`Deleted ${r.deleted} account${r.deleted === 1 ? "" : "s"}`);
+      }
+      setBulkDeleteOpen(null);
+      setSelectedIds(new Set());
+      await load();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -323,7 +376,29 @@ export default function Accounts() {
               <p className="text-xs text-muted-foreground">Accounts / {providerFilter}</p>
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            {selectedIds.size > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setBulkDeleteOpen({ ids: [...selectedIds], kind: "selected" })}
+                className="border-error/40 text-error hover:bg-error/10 hover:text-error"
+              >
+                <Trash2 className="h-4 w-4" /> Delete Selected ({selectedIds.size})
+              </Button>
+            )}
+            {filtered.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setBulkDeleteOpen({ ids: filtered.map((a) => a.id), kind: "filtered" })
+                }
+                className="border-error/40 text-error hover:bg-error/10 hover:text-error"
+              >
+                <Trash2 className="h-4 w-4" /> Delete All ({filtered.length})
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={loading}>
               <RefreshCw className="h-4 w-4" /> Refresh
             </Button>
@@ -402,6 +477,26 @@ export default function Accounts() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="w-10 px-4 py-3">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible"
+                        className="h-4 w-4 cursor-pointer rounded border-border accent-primary"
+                        checked={
+                          filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id))
+                        }
+                        // `indeterminate` isn't a JSX prop — set via ref callback.
+                        ref={(el) => {
+                          if (el) {
+                            const some = filtered.some((a) => selectedIds.has(a.id));
+                            const all = filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id));
+                            el.indeterminate = some && !all;
+                          }
+                        }}
+                        onChange={toggleSelectAll}
+                        disabled={filtered.length === 0}
+                      />
+                    </th>
                     <th className="px-4 py-3">#</th>
                     <th className="px-4 py-3">Provider</th>
                     <th className="px-4 py-3">Label</th>
@@ -415,7 +510,7 @@ export default function Accounts() {
                 <tbody>
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-12">
+                      <td colSpan={9} className="px-4 py-12">
                         {loading ? (
                           <div className="text-center text-muted-foreground">Loading…</div>
                         ) : (
@@ -438,7 +533,22 @@ export default function Accounts() {
                     </tr>
                   )}
                   {filtered.map((a, i) => (
-                    <tr key={a.id} className="border-b border-border/60 last:border-0 transition-colors hover:bg-secondary/70">
+                    <tr
+                      key={a.id}
+                      className={cn(
+                        "border-b border-border/60 last:border-0 transition-colors hover:bg-secondary/70",
+                        selectedIds.has(a.id) && "bg-primary/5"
+                      )}
+                    >
+                  <td className="px-4 py-2.5">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select account ${a.label ?? a.id}`}
+                      className="h-4 w-4 cursor-pointer rounded border-border accent-primary"
+                      checked={selectedIds.has(a.id)}
+                      onChange={() => toggleRow(a.id)}
+                    />
+                  </td>
                   <td className="px-4 py-2.5 tabular-nums text-muted-foreground" title={`db id ${a.id}`}>{i + 1}</td>
                   <td className="px-4 py-2.5 font-medium">{a.provider}</td>
                   <td className="px-4 py-2.5">{a.label ?? "—"}</td>
@@ -552,6 +662,48 @@ export default function Accounts() {
             </Button>
             <Button size="sm" onClick={confirmDelete} disabled={deleting}>
               {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={bulkDeleteOpen !== null}
+        onClose={() => !bulkDeleting && setBulkDeleteOpen(null)}
+        title={
+          bulkDeleteOpen?.kind === "selected"
+            ? `Delete ${bulkDeleteOpen.ids.length} selected accounts`
+            : `Delete all ${bulkDeleteOpen?.ids.length ?? 0} visible accounts`
+        }
+      >
+        <div className="space-y-4">
+          <Alert variant="warning">
+            This will permanently remove{" "}
+            <span className="font-semibold">{bulkDeleteOpen?.ids.length}</span> account
+            {bulkDeleteOpen && bulkDeleteOpen.ids.length === 1 ? "" : "s"} from the pool. Credentials
+            cannot be recovered after deletion.
+          </Alert>
+          <p className="text-xs text-muted-foreground">
+            {bulkDeleteOpen?.kind === "filtered" && statusFilter !== "all" && (
+              <>Only <span className="font-medium capitalize">{statusFilter}</span> accounts are affected — other statuses stay untouched.</>
+            )}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBulkDeleteOpen(null)}
+              disabled={bulkDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={confirmBulkDelete}
+              disabled={bulkDeleting}
+              className="bg-error text-white hover:bg-error/90"
+            >
+              {bulkDeleting ? "Deleting…" : `Delete ${bulkDeleteOpen?.ids.length ?? 0}`}
             </Button>
           </div>
         </div>

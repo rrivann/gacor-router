@@ -274,6 +274,27 @@ manage.delete("/accounts/:id", (c) => {
   return c.json({ success: true, id });
 });
 
+// Bulk delete — dashboard toolbar sends the visible/selected id list here so
+// nuking 100 codebuddy rows doesn't need 100 sequential DELETEs. Missing rows
+// are silently counted as failed instead of aborting the batch.
+manage.post("/accounts/delete-bulk", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { ids?: unknown } | null;
+  if (!body || !Array.isArray(body.ids)) {
+    return errorResponse(400, "invalid_request_error", "`ids` must be an array of account ids", "ids");
+  }
+  const ids = body.ids.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  if (ids.length === 0) {
+    return errorResponse(400, "invalid_request_error", "`ids` must contain at least one id", "ids");
+  }
+  let deleted = 0;
+  const failed: number[] = [];
+  for (const id of ids) {
+    if (deleteAccount(id)) deleted++;
+    else failed.push(id);
+  }
+  return c.json({ success: true, deleted, failed });
+});
+
 // ── Request logs ─────────────────────────────────────────────────
 
 manage.get("/stats/requests", (c) => {
