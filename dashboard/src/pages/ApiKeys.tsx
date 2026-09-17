@@ -24,7 +24,7 @@ import {
   updateApiKey,
   type ApiKey,
 } from "../lib/api";
-import { cn, formatDateTime, formatTokens } from "../lib/utils";
+import { cn, copyToClipboard, formatDateTime, formatTokens } from "../lib/utils";
 import { useTimedMessage } from "../hooks/useTimedMessage";
 
 // API Keys page. Multi-key model (enowx pattern) with etteum's always-reveal
@@ -91,11 +91,11 @@ export default function ApiKeys() {
   }
 
   async function copySecret(k: ApiKey) {
-    try {
-      await navigator.clipboard.writeText(k.secret);
+    const ok = await copyToClipboard(k.secret);
+    if (ok) {
       setCopied(k.id);
       setTimeout(() => setCopied((cur) => (cur === k.id ? null : cur)), 1200);
-    } catch {
+    } else {
       fail("clipboard blocked — reveal and copy manually");
     }
   }
@@ -301,12 +301,8 @@ export default function ApiKeys() {
         modelIds={modelIds}
         onCreated={async (secret) => {
           setAddOpen(false);
-          try {
-            await navigator.clipboard.writeText(secret);
-            ok("Key created & copied to clipboard");
-          } catch {
-            ok("Key created (clipboard blocked — reveal to copy)");
-          }
+          const copied = await copyToClipboard(secret);
+          ok(copied ? "Key created & copied to clipboard" : "Key created (clipboard blocked — reveal to copy)");
           await load();
         }}
         onFail={fail}

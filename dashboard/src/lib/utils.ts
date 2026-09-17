@@ -45,6 +45,38 @@ export function detectCredentialType(token: string): CredentialKind {
   return "refresh_token";
 }
 
+// Cross-context clipboard write. navigator.clipboard only works in secure
+// contexts (localhost or HTTPS), so a dashboard reached via plain HTTP
+// (tunnel or LAN IP) silently loses copy. This falls back to the deprecated
+// textarea + execCommand path in that case, which still works everywhere.
+export async function copyToClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to the legacy path — Safari sometimes rejects even in
+      // secure context if the gesture chain looks weird.
+    }
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    // Off-screen but selectable — display:none would block the selection.
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    ta.style.left = "-9999px";
+    ta.setAttribute("readonly", "");
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 // Deterministic chart color for a model label.
 export function modelColor(label: string, index = 0): string {
   let hash = index * 31;

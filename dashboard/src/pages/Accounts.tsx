@@ -22,7 +22,7 @@ import {
   warmAll,
   type AccountRow,
 } from "../lib/api";
-import { formatDateTime, cn, detectCredentialType } from "../lib/utils";
+import { formatDateTime, cn, copyToClipboard, detectCredentialType } from "../lib/utils";
 import { useTimedMessage } from "../hooks/useTimedMessage";
 import { useWsEvent } from "../hooks/useWebSocket";
 import { CreditCell } from "../components/accounts/CreditCell";
@@ -237,7 +237,11 @@ export default function Accounts() {
   async function handleCopy(id: number) {
     const text = revealed[id];
     if (!text) return;
-    await navigator.clipboard.writeText(text);
+    const ok = await copyToClipboard(text);
+    if (!ok) {
+      fail("clipboard blocked — select the value manually");
+      return;
+    }
     setCopied(id);
     setTimeout(() => setCopied(null), 1500);
   }

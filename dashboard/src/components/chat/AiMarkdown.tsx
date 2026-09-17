@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Check, Copy } from "lucide-react";
+import { copyToClipboard } from "../../lib/utils";
 
 // Full GitHub-flavored markdown for chat messages: headings, lists, tables,
 // blockquotes, links, and fenced code with highlighting + copy.
@@ -60,7 +61,7 @@ function CodeBlock({ inline, className, children }: { inline?: boolean; classNam
   }
 
   async function copy() {
-    await navigator.clipboard.writeText(code);
+    if (!(await copyToClipboard(code))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }

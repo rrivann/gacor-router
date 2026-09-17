@@ -7,7 +7,7 @@ import { Input } from "../components/ui/input";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Alert } from "../components/ui/Alert";
 import { fetchModels, type ModelInfo } from "../lib/api";
-import { cn, formatTokens } from "../lib/utils";
+import { cn, copyToClipboard, formatTokens } from "../lib/utils";
 
 // Owner badge palette — keyed by the owned_by string so every vendor reads
 // distinctly (etteum pattern).
@@ -84,7 +84,7 @@ export default function Models() {
   }, [models, search, provider, kind]);
 
   async function copyId(id: string) {
-    await navigator.clipboard.writeText(id);
+    if (!(await copyToClipboard(id))) return;
     setCopied(id);
     setTimeout(() => setCopied(null), 1500);
   }

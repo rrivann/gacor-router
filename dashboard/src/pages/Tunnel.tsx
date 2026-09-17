@@ -11,7 +11,7 @@ import {
   fetchTunnelStatus,
   type TunnelStatus,
 } from "../lib/api";
-import { cn } from "../lib/utils";
+import { cn, copyToClipboard } from "../lib/utils";
 
 // Cloudflare quick tunnel: exposes the router on a public trycloudflare.com
 // URL. Status is polled while an enable is in flight (binary download +
@@ -81,7 +81,7 @@ export default function Tunnel() {
 
   async function handleCopy() {
     if (!status?.url) return;
-    await navigator.clipboard.writeText(status.url);
+    if (!(await copyToClipboard(status.url))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
