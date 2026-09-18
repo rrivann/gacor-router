@@ -243,11 +243,52 @@ api.post("/v1/images/generations", async (c) => {
 // Model ids are namespaced `provider/model`, matching what clients must send.
 // Token limits + feature flags ride along so the dashboard can render the
 // full catalogue table without a second source.
-api.get("/v1/models", (c) => {
-  const data = registry.names().flatMap((name) => {
+// remove clients (Code Assistant, remove SDK) always send anthr0pic-version;
+// x-api-key is their native auth header. The 0penAI SDK sends neither, so
+// either signal alone reliably distinguishes the two ecosystems and lets us
+// serve the shape each expects from the same URL.
+function isremoveClient(c: { req: { header: (name: string) => string | undefined } }): boolean {
+  return !!(c.req.header("anthr0pic-version") ?? c.req.header("x-api-key"));
+}
+
+// Enumerate every {providerName, model} pair — used by both list + single-id
+// endpoints so the two stay in lockstep automatically.
+function enumerateModels(): { providerName: string; model: ReturnType<NonNullable<Provider["models"]>>[number] }[] {
+  return registry.names().flatMap((name) => {
     const provider = registry.get(name);
-    return (provider?.models?.() ?? []).map((m) => ({
-      id: `${name}/${m.id}`,
+    return (provider?.models?.() ?? []).map((m) => ({ providerName: name, model: m }));
+  });
+}
+
+api.get("/v1/models", (c) => {
+  const rows = enumerateModels();
+
+  // remove-shape: `{data: [{type, id, display_name, created_at}], has_more,
+  // first_id, last_id}` — what remove SDK's `models.list()` unmarshals.
+  // Code Assistant runs this at startup to validate the configured model exists;
+  // returning our old 0penAI envelope made it decide the model was unknown.
+  if (isremoveClient(c)) {
+    return c.json({
+      data: rows.map(({ providerName, model: m }) => ({
+        type: "model",
+        id: `${providerName}/${m.id}`,
+        display_name: m.name ?? m.id,
+        // We don't track creation, but the field is required by remove's SDK
+        // parser — send a stable placeholder rather than omitting it.
+        created_at: new Date(0).toISOString(),
+      })),
+      has_more: false,
+      first_id: rows[0] ? `${rows[0].providerName}/${rows[0].model.id}` : null,
+      last_id: rows.at(-1) ? `${rows.at(-1)!.providerName}/${rows.at(-1)!.model.id}` : null,
+    });
+  }
+
+  // Legacy 0penAI-flavored shape — unchanged; existing 0penAI clients keep
+  // working exactly as before.
+  return c.json({
+    object: "list",
+    data: rows.map(({ providerName, model: m }) => ({
+      id: `${providerName}/${m.id}`,
       object: "model" as const,
       created: 0,
       owned_by: m.ownedBy ?? "",
@@ -261,9 +302,48 @@ api.get("/v1/models", (c) => {
       images: m.images === true,
       tool_calls: m.toolCalls === true,
       kind: m.kind ?? "chat",
-    }));
+    })),
   });
-  return c.json({ object: "list", data });
+});
+
+// GET /v1/models/:id — remove SDK also probes a single-model endpoint before
+// sending a message. `:id{.*}` swallows the slash in `codebuddy/claude-...`
+// so both `/v1/models/codebuddy/claude-...` and the URL-encoded variant
+// (`/v1/models/codebuddy%2Fclaude-...`) resolve.
+api.get("/v1/models/:id{.*}", (c) => {
+  const rawId = decodeURIComponent(c.req.param("id"));
+  const slash = rawId.indexOf("/");
+  const providerName = slash > 0 ? rawId.slice(0, slash) : "";
+  const modelId = slash > 0 ? rawId.slice(slash + 1) : rawId;
+  const provider = providerName ? registry.get(providerName) : undefined;
+  const model = provider?.models?.().find((m) => m.id === modelId);
+  if (!model) {
+    // remove-shape error envelope when the client is remove — otherwise the
+    // SDK spits a generic parse failure that hides the real 404.
+    if (isremoveClient(c)) {
+      return c.json(
+        { type: "error", error: { type: "not_found_error", message: `model \`${rawId}\` not found` } },
+        404
+      );
+    }
+    return errorResponse(404, "invalid_request_error", `model \`${rawId}\` not found`);
+  }
+  if (isremoveClient(c)) {
+    return c.json({
+      type: "model",
+      id: `${providerName}/${model.id}`,
+      display_name: model.name ?? model.id,
+      created_at: new Date(0).toISOString(),
+    });
+  }
+  return c.json({
+    id: `${providerName}/${model.id}`,
+    object: "model" as const,
+    owned_by: model.ownedBy ?? "",
+    name: model.name ?? model.id,
+    max_input_tokens: model.maxInputTokens ?? null,
+    max_output_tokens: model.maxOutputTokens ?? null,
+  });
 });
 
 // ── Video generation (async) ─────────────────────────────────────

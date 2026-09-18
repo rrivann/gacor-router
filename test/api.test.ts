@@ -276,6 +276,64 @@ test("/v1/models lists the catalogue namespaced by provider", async () => {
   expect(astra.object).toBe("model");
 });
 
+test("/v1/models with remove headers returns remove-shape envelope", async () => {
+  // remove SDK's models.list() unmarshals a fixed shape. Setting either
+  // header is enough — Code Assistant sends both, but each alone is a strong
+  // signal since the 0penAI SDK never sends either.
+  const r = await api.request("/v1/models", {
+    headers: { "anthr0pic-version": "2023-06-01" },
+  });
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  // No `object: "list"` here — that's the 0penAI signal we deliberately drop.
+  expect(body.object).toBeUndefined();
+  expect(body.has_more).toBe(false);
+  expect(typeof body.first_id).toBe("string");
+  expect(typeof body.last_id).toBe("string");
+  expect(Array.isArray(body.data)).toBe(true);
+  const first = body.data[0];
+  expect(first.type).toBe("model");
+  expect(typeof first.id).toBe("string");
+  expect(typeof first.display_name).toBe("string");
+  expect(typeof first.created_at).toBe("string");
+});
+
+test("/v1/models/:id returns the single model in the negotiated shape", async () => {
+  const encodedId = encodeURIComponent("codebuddy/claude-opus-4.7-1m");
+  // remove-shape response.
+  const anthr0pic = await api.request(`/v1/models/${encodedId}`, {
+    headers: { "anthr0pic-version": "2023-06-01" },
+  });
+  expect(anthr0pic.status).toBe(200);
+  const abody = await anthr0pic.json();
+  expect(abody.type).toBe("model");
+  expect(abody.id).toBe("codebuddy/claude-opus-4.7-1m");
+  expect(typeof abody.display_name).toBe("string");
+
+  // 0penAI-shape response.
+  const openai = await api.request(`/v1/models/${encodedId}`);
+  expect(openai.status).toBe(200);
+  const obody = await openai.json();
+  expect(obody.object).toBe("model");
+  expect(obody.id).toBe("codebuddy/claude-opus-4.7-1m");
+});
+
+test("/v1/models/:id returns 404 with the right envelope per client", async () => {
+  const anthr0pic = await api.request("/v1/models/codebuddy/nope-model", {
+    headers: { "anthr0pic-version": "2023-06-01" },
+  });
+  expect(anthr0pic.status).toBe(404);
+  const abody = await anthr0pic.json();
+  expect(abody.type).toBe("error");
+  expect(abody.error.type).toBe("not_found_error");
+  expect(abody.error.message).toContain("nope-model");
+
+  const openai = await api.request("/v1/models/codebuddy/nope-model");
+  expect(openai.status).toBe(404);
+  const obody = await openai.json();
+  expect(obody.error.message).toContain("nope-model");
+});
+
 // ── /v1/messages (Anthropic-compatible) ──────────────────────────
 // Same pool, proxy, and logging as /v1/chat/completions; only the request
 // conversion and the response rendering differ.
