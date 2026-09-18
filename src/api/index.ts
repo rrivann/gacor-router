@@ -22,7 +22,7 @@ import { errorResponse } from "../lib/http";
 import { loggingTap } from "../lib/logging";
 import { compressMessages, formatRtkLog } from "../rtk";
 import { applyFilters } from "../lib/filters";
-import { getSetting } from "../db/accounts";
+import { getAccount, getSetting } from "../db/accounts";
 import { apiKeyAuth, enforceKeyScope } from "../lib/apiKeyAuth";
 import { insertRequestLog } from "../db/logs";
 import { createVideoJob, getVideoJob } from "../db/videoJobs";
@@ -120,10 +120,74 @@ async function readBody(c: { req: { json: () => Promise<unknown> } }): Promise<R
   }
 }
 
+// When every attempt in a NoAccountError is a quota-exhausted 429 (no
+// dead/transient noise), the pool isn't broken — it's rate-limited. Shape
+// the response as a proper 429 with Retry-After so remove clients (Code Assistant,
+// remove SDK) take their rate-limit branch instead of the generic API-error
+// retry backoff (which stalls with "Retrying in 51s" prompts). Returns null
+// when the classification doesn't fit — caller falls through to 503.
+function rateLimitedFailure(e: NoAccountError): Response | null {
+  const attempts = e.attempts;
+  if (attempts.length === 0) return null;
+  if (!attempts.every((a) => a.outcome === "exhausted")) return null;
+
+  // Compute Retry-After from the soonest cached resetAtUnix across the
+  // exhausted accounts. `Attempt.account` is the minimal runtime shape used
+  // by the pool — the usage cache lives on the DB row, so we look each one
+  // up. Cache is populated by warmup / usage refresh; if it's missing we
+  // fall back to 60s so the client still respects the header shape.
+  const now = Math.floor(Date.now() / 1000);
+  let soonestReset = Number.POSITIVE_INFINITY;
+  for (const a of attempts) {
+    const row = getAccount(a.account.id);
+    const usage = (row?.usageJson ?? null) as { resetAtUnix?: number } | null;
+    if (usage?.resetAtUnix && usage.resetAtUnix > now) {
+      soonestReset = Math.min(soonestReset, usage.resetAtUnix);
+    }
+  }
+  const retryAfter =
+    soonestReset === Number.POSITIVE_INFINITY
+      ? 60
+      : Math.max(1, Math.min(soonestReset - now, 86_400)); // clamp to 24h
+
+  const detail = attempts
+    .map((a) => `${a.account.label}: ${a.status} ${a.outcome}`)
+    .join("; ");
+
+  return new Response(
+    JSON.stringify({
+      type: "error",
+      error: {
+        type: "rate_limit_error",
+        message:
+          `all ${attempts.length} account(s) for provider "${e.provider}" hit their quota — retry in ${retryAfter}s` +
+          (detail ? ` · ${detail}` : ""),
+      },
+    }),
+    {
+      status: 429,
+      headers: {
+        "content-type": "application/json",
+        "retry-after": String(retryAfter),
+        // remove convention header — some SDKs read this when Retry-After
+        // is absent; publish both so either shape works.
+        "anthr0pic-ratelimit-unified-reset": String(
+          soonestReset === Number.POSITIVE_INFINITY ? now + retryAfter : soonestReset
+        ),
+      },
+    }
+  );
+}
+
 // Every account failed, or the upstream itself failed. Both carry the attempt
 // log, which is the only way to see *why* rotation ran out.
 function upstreamFailure(e: unknown): Response {
   if (e instanceof NoAccountError) {
+    // Pure-quota exhaustion → 429 with Retry-After. Mixed failures (dead /
+    // transient / never-tried) fall through to the generic 503 below.
+    const rateLimited = rateLimitedFailure(e);
+    if (rateLimited) return rateLimited;
+
     const detail = e.attempts
       .map((a) => `${a.account.label}: ${a.status} ${a.outcome}`)
       .join("; ");

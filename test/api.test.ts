@@ -253,6 +253,60 @@ test("the ban is persisted, so the next request never reaches the upstream", asy
   expect(calls).toBe(before); // no fetch: no active account left
 });
 
+test("all-exhausted pool returns 429 rate_limit_error with Retry-After", async () => {
+  // Every attempt is a quota-exhausted 429. Router should shape the response
+  // as a proper rate-limit signal (not the generic 503 no_available_account
+  // error) so Anthropic clients like Claude Code take their rate-limit
+  // branch instead of the default retry backoff.
+  liveDb.exec(`UPDATE accounts SET status='active', usage_json='{"resetAtUnix":${Math.floor(Date.now() / 1000) + 900}}' WHERE id=1`);
+  stub = () => new Response(`{"error":"insufficient_quota"}`, { status: 429 });
+
+  const r = await chat({ model: "codebuddy/claude-opus-5", messages: msgs });
+  expect(r.status).toBe(429);
+  const body = await r.json();
+  expect(body.error.type).toBe("rate_limit_error");
+  expect(body.error.message).toContain("quota");
+  expect(body.error.message).toContain("acc-1");
+
+  const retryAfter = r.headers.get("retry-after");
+  expect(retryAfter).not.toBeNull();
+  // 15-minute reset above should produce a Retry-After close to 900s.
+  const seconds = parseInt(retryAfter!, 10);
+  expect(seconds).toBeGreaterThan(0);
+  expect(seconds).toBeLessThanOrEqual(900);
+
+  // The anthr0pic-flavoured header is also published for SDKs that read it.
+  expect(r.headers.get("anthr0pic-ratelimit-unified-reset")).not.toBeNull();
+});
+
+test("exhausted pool with no cached resetAtUnix falls back to Retry-After: 60", async () => {
+  // Fresh install / never probed → usage cache is null but the outcome is
+  // still 429. Router shouldn't crash — it should still produce a 429 with
+  // the header set to the generic fallback so clients respect the shape.
+  liveDb.exec(`UPDATE accounts SET status='active', usage_json=NULL WHERE id=1`);
+  stub = () => new Response(`{"error":"insufficient_quota"}`, { status: 429 });
+
+  const r = await chat({ model: "codebuddy/claude-opus-5", messages: msgs });
+  expect(r.status).toBe(429);
+  expect(r.headers.get("retry-after")).toBe("60");
+});
+
+test("mixed exhausted/dead failures stay as 503 no_available_account_error", async () => {
+  // If even one attempt is dead/transient, the pool has a real health
+  // problem — not a pure rate-limit. Keep the 503 shape so operators see
+  // it as a pool alert, not just a quota tick. First stub returns dead
+  // (200 with an "illegal" payload), which flips the account status; we
+  // don't need to actually mix outcomes in one request because a single
+  // dead attempt is enough to disqualify the 429 branch.
+  liveDb.exec(`UPDATE accounts SET status='active', usage_json=NULL WHERE id=1`);
+  stub = () => new Response(`{"code":11140,"msg":"request illegal"}`, { status: 200 });
+
+  const r = await chat({ model: "codebuddy/claude-opus-5", messages: msgs });
+  expect(r.status).toBe(503);
+  const body = await r.json();
+  expect(body.error.type).toBe("no_available_account_error");
+});
+
 test("default_provider lets a bare model id route", async () => {
   // Reactivate the account banned above.
   liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
