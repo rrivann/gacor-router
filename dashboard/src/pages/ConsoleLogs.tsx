@@ -12,20 +12,49 @@ import { clearConsoleLogs as clearApi, fetchConsoleLogs } from "../lib/api";
 // we're mounted.
 const MAX = 1000;
 
-// Colour per log level. Green is the default so plain console.log() lines
-// (the most common) don't scream for attention; INFO/WARN/ERROR/DEBUG each
-// get the standard terminal palette so they're easy to spot in a scroll.
-const LEVEL_COLOR: Record<string, string> = {
-  LOG: "text-success",
-  INFO: "text-info",
-  WARN: "text-warning",
-  ERROR: "text-error",
-  DEBUG: "text-primary",
-};
-
-function levelOf(line: string): string {
+// 9router-inspired terminal palette — pattern-matched, not level-matched.
+// Glyph prefixes (▶ POST, 📊 DONE, ✗ ERROR) win over the [LEVEL] tag so a
+// rotation trace reads at a glance: yellow starts, cyan completes, red
+// fails, orange rotates. Tag-scoped colours ([RTK], [tunnel], [AUTH], …)
+// come next so operator activity stands out from generic INFO lines. Level
+// is the fallback for anything without a marker (console.log() → green).
+//
+// Direct Tailwind palette classes (not semantic tokens) — terminal output
+// wants an authentic screen-of-code look, not our app's muted UI palette.
+function colorLine(line: string): string {
+  // Request start — headline of every attempt. Bright yellow so a burst of
+  // rotation is scannable.
+  if (line.includes("▶ POST")) return "text-yellow-300";
+  // Success completion — paired visual echo of ▶. Cyan/blue contrasts with
+  // the yellow start line so the pair reads as one block.
+  if (line.includes("📊 DONE")) return "text-cyan-300";
+  // Hard failure on a request.
+  if (line.includes("✗ ERROR")) return "text-red-400";
+  // Rotation-related warnings that fire in bursts when a pool goes down.
+  if (line.includes("[FALLBACK]")) return "text-orange-300";
+  if (line.includes("[AUTH]")) return "text-yellow-400";
+  // RTK savings — amber to nod at "efficiency" alongside the tunnel blue
+  // family. Also mirrors 9router's log colour for the same tag.
+  if (line.includes("[RTK]")) return "text-amber-300";
+  // Tunnel state machine + shortId + register.
+  if (line.includes("[tunnel]")) return "text-sky-300";
+  // Generic content-filter line (still comes through as plain LOG level).
+  if (line.startsWith("filters:")) return "text-fuchsia-300";
+  // Fallback per level tag.
   const m = line.match(/^\[(\w+)\]/);
-  return m ? m[1]! : "LOG";
+  const level = m ? m[1] : "LOG";
+  switch (level) {
+    case "INFO":
+      return "text-blue-300";
+    case "WARN":
+      return "text-yellow-300";
+    case "ERROR":
+      return "text-red-400";
+    case "DEBUG":
+      return "text-purple-300";
+    default:
+      return "text-green-300";
+  }
 }
 
 export default function ConsoleLogs() {
@@ -117,10 +146,7 @@ export default function ConsoleLogs() {
           ) : (
             <div className="space-y-0.5">
               {logs.map((line, i) => (
-                <div
-                  key={i}
-                  className={cn("whitespace-pre-wrap break-words", LEVEL_COLOR[levelOf(line)] ?? "text-success")}
-                >
+                <div key={i} className={cn("whitespace-pre-wrap break-words", colorLine(line))}>
                   {line}
                 </div>
               ))}

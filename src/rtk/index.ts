@@ -107,7 +107,10 @@ export function formatRtkLog(stats: RtkStats | null): string | null {
   const saved = stats.bytesBefore - stats.bytesAfter;
   const pct = stats.bytesBefore > 0 ? ((saved / stats.bytesBefore) * 100).toFixed(1) : "0";
   const filters = [...new Set(stats.hits.map((h) => h.filter))].join(",");
-  return `[rtk] saved ${saved}/${stats.bytesBefore} chars (${pct}%) via [${filters}] hits=${stats.hits.length}`;
+  // 9router-inspired shape: `[RTK] saved 58201B / 681273B (8.5%) via [dedup-log,…] hits=84`.
+  // Uppercase tag stands out in /console-log alongside [AUTH]/[FALLBACK]/[tunnel],
+  // and the `B` bandwidth unit reads better than "chars" for token-saver review.
+  return `[RTK] saved ${saved}B / ${stats.bytesBefore}B (${pct}%) via [${filters}] hits=${stats.hits.length}`;
 }
 
 export type { Filter } from "./filters";

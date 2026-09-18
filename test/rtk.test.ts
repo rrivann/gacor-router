@@ -409,7 +409,9 @@ test("every tool message in a conversation is compressed", () => {
 test("the log line reports the saving and the filters used", () => {
   const stats = { bytesBefore: 1000, bytesAfter: 250, hits: [{ filter: "grep", saved: 750 }] };
   const line = formatRtkLog(stats)!;
-  expect(line).toContain("saved 750/1000 chars");
+  // 9router-inspired shape: uppercase [RTK] tag + "NB / MB" bandwidth units.
+  expect(line.startsWith("[RTK]")).toBe(true);
+  expect(line).toContain("saved 750B / 1000B");
   expect(line).toContain("75.0%");
   expect(line).toContain("[grep]");
 });
