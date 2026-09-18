@@ -1500,3 +1500,52 @@ test("GET /api/stats/usage buckets by range and filters old rows out of 1d", asy
   const dq = await (await manage.request("/stats/usage?range=bogus")).json();
   expect(dq.range).toBe("1d");
 });
+
+
+// ── Console log capture ─────────────────────────────────────────
+
+test("/api/console-logs returns a JSON array of captured lines", async () => {
+  const { initConsoleLogCapture } = await import("../src/lib/consoleLog");
+  initConsoleLogCapture();
+  console.log("smoke-test-line");
+  const r = await manage.request("/console-logs");
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(Array.isArray(body.data)).toBe(true);
+  // Our synthetic line lands in the buffer with the [LOG] prefix.
+  expect(body.data.some((l: string) => l.includes("smoke-test-line"))).toBe(true);
+});
+
+test("/api/console-logs DELETE clears the buffer and emits a clear event", async () => {
+  const { initConsoleLogCapture } = await import("../src/lib/consoleLog");
+  initConsoleLogCapture();
+  console.log("before-clear");
+  const events: { type: string; data: unknown }[] = [];
+  const off = onEvent((e) => events.push(e));
+  const r = await manage.request("/console-logs", { method: "DELETE" });
+  expect(r.status).toBe(200);
+  expect((await r.json()).success).toBe(true);
+  const after = await (await manage.request("/console-logs")).json();
+  expect(after.data.length).toBe(0);
+  // The clear event carries { clear: true } — subscribers use it to wipe UI.
+  const clearEv = events.find((e) => e.type === "console_log" && (e.data as { clear?: boolean }).clear === true);
+  expect(clearEv).toBeDefined();
+  off();
+});
+
+test("console.log fires a console_log event with the [LEVEL] prefixed line", async () => {
+  const { initConsoleLogCapture } = await import("../src/lib/consoleLog");
+  initConsoleLogCapture();
+  const events: { type: string; data: unknown }[] = [];
+  const off = onEvent((e) => events.push(e));
+  console.warn("hello-from-test");
+  const lineEv = events.find((e) => {
+    const d = e.data as { line?: string };
+    return e.type === "console_log" && typeof d.line === "string" && d.line.includes("hello-from-test");
+  });
+  expect(lineEv).toBeDefined();
+  // WARN level prefix — colour-coding driver on the frontend.
+  const line = (lineEv!.data as { line: string }).line;
+  expect(line.startsWith("[WARN]")).toBe(true);
+  off();
+});

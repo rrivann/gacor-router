@@ -12,6 +12,7 @@ import {
   Filter,
   KeyRound,
   Film,
+  Terminal,
   LogOut,
 } from "lucide-react";
 import { fetchVersion, logout } from "../../lib/api";
@@ -41,7 +42,10 @@ const sections: { title: string; items: NavItem[] }[] = [
   },
   {
     title: "OBSERVE",
-    items: [{ label: "Requests", path: "/requests", icon: Activity }],
+    items: [
+      { label: "Requests", path: "/requests", icon: Activity },
+      { label: "Console", path: "/console-log", icon: Terminal },
+    ],
   },
   {
     title: "CONFIG",

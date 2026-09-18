@@ -404,6 +404,13 @@ export const updateApiKey = (
 export const deleteApiKey = (id: number) =>
   fetchApi<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" });
 
+// ── Console logs ─────────────────────────────────────────────────
+
+export const fetchConsoleLogs = () => fetchApi<{ data: string[] }>("/api/console-logs");
+
+export const clearConsoleLogs = () =>
+  fetchApi<{ success: boolean }>("/api/console-logs", { method: "DELETE" });
+
 // ── Process debug ────────────────────────────────────────────────
 
 export interface DebugProcess {

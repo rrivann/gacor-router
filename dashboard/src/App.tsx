@@ -10,6 +10,7 @@ import Tunnel from "./pages/Tunnel";
 import Filters from "./pages/Filters";
 import ApiKeys from "./pages/ApiKeys";
 import Videos from "./pages/Videos";
+import ConsoleLogs from "./pages/ConsoleLogs";
 import Login from "./pages/Login";
 import { AuthGate } from "./components/AuthGate";
 
@@ -33,6 +34,7 @@ export default function App() {
         />
         <Route path="accounts" element={<Accounts />} />
         <Route path="requests" element={<Requests />} />
+        <Route path="console-log" element={<ConsoleLogs />} />
         <Route path="models" element={<Models />} />
         <Route path="videos" element={<Videos />} />
         <Route path="filters" element={<Filters />} />

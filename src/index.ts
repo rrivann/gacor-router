@@ -11,6 +11,11 @@ import { onEvent } from "./lib/events";
 import { startAutoWarmScheduler } from "./lib/autowarm";
 import { startVideoPoller } from "./lib/videoPoller";
 import { reconcileTunnel } from "./tunnel/manager";
+import { initConsoleLogCapture } from "./lib/consoleLog";
+
+// Take over console.{log,info,warn,error,debug} BEFORE anything else logs so
+// the dashboard /console-log page captures the router's full boot sequence.
+initConsoleLogCapture();
 
 const app = new Hono();
 

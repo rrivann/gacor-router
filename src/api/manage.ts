@@ -64,6 +64,7 @@ import {
 } from "../db/apiKeys";
 import { generateApiKeySecret, invalidateApiKeyCache } from "../lib/apiKeyAuth";
 import { listVideoJobs, getVideoJob, deleteVideoJob } from "../db/videoJobs";
+import { clearConsoleLogs, getConsoleLogs } from "../lib/consoleLog";
 import { unlinkSync, existsSync } from "node:fs";
 import {
   COOKIE_NAME,
@@ -327,6 +328,18 @@ manage.get("/stats/usage", (c) => {
   const q = c.req.query("range") ?? "1d";
   const range: UsageRange = q === "7d" || q === "30d" || q === "all" ? q : "1d";
   return c.json(usageReport(range));
+});
+
+// ── Console logs ─────────────────────────────────────────────────
+// Ring buffer of the router process's own console output. The dashboard
+// /console-log page reads this on mount and then follows the `console_log`
+// WS event stream for live tail. DELETE wipes the buffer.
+
+manage.get("/console-logs", (c) => c.json({ data: getConsoleLogs() }));
+
+manage.delete("/console-logs", (c) => {
+  clearConsoleLogs();
+  return c.json({ success: true });
 });
 
 // ── Settings ─────────────────────────────────────────────────────
