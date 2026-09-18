@@ -36,6 +36,18 @@ import type { ChatRequest, ImageRequest, Provider, VideoRequest } from "../provi
 type ApiVars = { apiKey?: ApiKeyRow };
 export const api = new Hono<{ Variables: ApiVars }>();
 
+// Defensive path forward: some Anthropic SDK versions double the /v1 prefix
+// when ANTHROPIC_BASE_URL includes a trailing /v1 (SDK also hardcodes /v1
+// into request paths → "/v1" + "/v1/messages" = "/v1/v1/messages"). Instead
+// of asking every user to reconfigure, catch those paths and re-dispatch
+// them internally with the correct URL. The auth middleware below still
+// fires on the canonical /v1/* path.
+api.all("/v1/v1/*", (c) => {
+  const url = new URL(c.req.url);
+  url.pathname = url.pathname.replace(/^\/v1\/v1\//, "/v1/");
+  return api.fetch(new Request(url.toString(), c.req.raw));
+});
+
 // Gate every /v1/* route with the API-key middleware. It's a no-op in the
 // two safe-by-default cases (no keys configured, or loopback request); the
 // moment either changes, clients need a real key.

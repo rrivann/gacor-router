@@ -515,6 +515,24 @@ test("/v1/messages/count_tokens rejects malformed bodies", async () => {
   expect(notObj.status).toBe(400);
 });
 
+test("/v1/v1/* is a defensive alias that forwards to /v1/*", async () => {
+  // Some clients accidentally double the prefix when ANTHROPIC_BASE_URL
+  // carries a trailing /v1 and the SDK also hardcodes /v1 into its request
+  // paths. Instead of asking every user to reconfigure, the router accepts
+  // /v1/v1/messages and treats it as /v1/messages.
+  const r = await api.request("/v1/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-opus-4-7[1m]",
+      messages: [{ role: "user", content: "halo" }],
+    }),
+  });
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(typeof body.input_tokens).toBe("number");
+});
+
 
 
 
