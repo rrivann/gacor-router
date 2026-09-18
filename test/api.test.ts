@@ -343,6 +343,15 @@ test("resolveModel unwraps a native alias to provider/model", async () => {
   expect(route).toEqual({ provider: "codebuddy", model: "claude-opus-4.7-1m" });
 });
 
+test("resolveModel is lenient: provider-prefixed alias still resolves", async () => {
+  // A client that keeps the provider prefix (`codebuddy/claude-opus-4-7[1m]`)
+  // gets routed the same way as the bare alias — otherwise the tail would
+  // pass through verbatim and hit the upstream with a name it doesn't know.
+  const { resolveModel } = await import("../src/lib/model");
+  const route = resolveModel("codebuddy/claude-opus-4-7[1m]");
+  expect(route).toEqual({ provider: "codebuddy", model: "claude-opus-4.7-1m" });
+});
+
 test("/v1/models remove shape lists aliases the client whitelists", async () => {
   const r = await api.request("/v1/models", {
     headers: { "anthr0pic-version": "2023-06-01" },

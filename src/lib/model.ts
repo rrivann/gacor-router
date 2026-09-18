@@ -21,7 +21,21 @@ export function resolveModel(raw: string): Route | null {
 
   const slash = source.indexOf("/");
   if (slash > 0 && slash < source.length - 1) {
-    return { provider: source.slice(0, slash), model: source.slice(slash + 1) };
+    const provider = source.slice(0, slash);
+    const model = source.slice(slash + 1);
+    // Lenient: a user who typed `codebuddy/claude-opus-4-7[1m]` (aliased
+    // model glued to a provider prefix) still gets routed correctly. We
+    // resolve the tail through the alias table too and re-split if that
+    // yields a canonical `provider/model`. Otherwise the provider stays
+    // whatever the client asked for.
+    const tailAlias = resolveAlias(model);
+    if (tailAlias) {
+      const tailSlash = tailAlias.indexOf("/");
+      if (tailSlash > 0 && tailSlash < tailAlias.length - 1) {
+        return { provider: tailAlias.slice(0, tailSlash), model: tailAlias.slice(tailSlash + 1) };
+      }
+    }
+    return { provider, model };
   }
   const fallback = getSetting("default_provider");
   if (!fallback) return null;
