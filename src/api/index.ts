@@ -18,6 +18,7 @@ import {
 } from "../convert/anthropic";
 import { resolveModel } from "../lib/model";
 import { publicAliasesFor, resolveAlias } from "../lib/modelAliases";
+import { extractThinkLevel } from "../lib/proxyLog";
 import { errorResponse } from "../lib/http";
 import { loggingTap } from "../lib/logging";
 import { compressMessages, formatRtkLog } from "../rtk";
@@ -220,6 +221,12 @@ function run(
   saver: boolean,
   apiKey: ApiKeyRow | undefined
 ) {
+  // Attach the human-readable thinking indicator (max / high / 16000 / …)
+  // extracted from the original client body — the proxy loop reads it when
+  // emitting the ▶ POST console line. Runs against r.body so it picks up
+  // both remove native `thinking:{...}` and Code Assistant beta `effort`.
+  req.think = extractThinkLevel(r.body);
+
   // Filters run first so RTK (and the provider builder) see the rewritten text.
   // Mutates req.messages in place, same contract as compressMessages.
   const filterStats = applyFilters(req.messages, r.providerName);

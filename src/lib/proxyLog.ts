@@ -25,12 +25,52 @@ export function logRequestStart(opts: {
   stream: boolean;
   messages: number;
   tools: number;
+  think?: string | null;
 }): void {
   const kind = opts.stream ? "STREAM" : "SYNC";
   const tools = opts.tools > 0 ? ` · ${opts.tools} TOOL` : "";
+  const think = opts.think ? ` · THINK:${opts.think}` : "";
   console.info(
-    `${ts()} 🟤 ▶ POST ${opts.providerName}/${opts.model} · ${kind} · ${opts.messages} MSG${tools} · ACC:${opts.accountLabel}`
+    `${ts()} 🟤 ▶ POST ${opts.providerName}/${opts.model} · ${kind} · ${opts.messages} MSG${tools}${think} · ACC:${opts.accountLabel}`
   );
+}
+
+// Extract a short THINK indicator from the client body — covers the three
+// wire shapes we see in the wild:
+//   1. remove native chat: { thinking: { type: "enabled" | "auto", budget_tokens?: N } }
+//   2. remove Code Assistant beta:  { output_config: { effort: "max" | "high" | ... } }
+//                                or a top-level { effort: "max" | ... }
+//   3. 0penAI reasoning:      { reasoning_effort: "low" | "medium" | "high" }
+// Returns null when the client didn't ask for thinking (so we skip the ·
+// THINK:... segment entirely — the request line stays clean).
+export function extractThinkLevel(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+
+  // remove native thinking block.
+  const thinking = b.thinking as
+    | { type?: string; budget_tokens?: number | string }
+    | undefined;
+  if (thinking && typeof thinking === "object") {
+    if (thinking.type === "disabled") return "off";
+    const budget = thinking.budget_tokens;
+    if (typeof budget === "number" && budget > 0) return String(budget);
+    if (typeof budget === "string" && budget) return budget;
+    if (thinking.type === "enabled" || thinking.type === "auto") return thinking.type;
+  }
+
+  // Code Assistant beta effort — nested or top-level.
+  const outputCfg = b.output_config as { effort?: string } | undefined;
+  const effort =
+    (outputCfg && typeof outputCfg === "object" && outputCfg.effort) ||
+    (typeof b.effort === "string" ? b.effort : undefined);
+  if (typeof effort === "string" && effort) return effort;
+
+  // 0penAI-flavoured reasoning_effort (o3, o4-mini, …).
+  const reasoning = b.reasoning_effort;
+  if (typeof reasoning === "string" && reasoning) return reasoning;
+
+  return null;
 }
 
 export function logRequestError(opts: {

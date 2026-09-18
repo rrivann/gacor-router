@@ -1670,3 +1670,54 @@ test("a rotation through an exhausted account leaves a full ✗ / ⚠️ / ▶ t
   liveDb.exec(`DELETE FROM accounts WHERE id=99`);
   liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
 });
+
+test("extractThinkLevel parses remove thinking + Code Assistant effort + 0penAI reasoning_effort", async () => {
+  const { extractThinkLevel } = await import("../src/lib/proxyLog");
+  // remove native — enabled with a budget goes to the numeric segment.
+  expect(extractThinkLevel({ thinking: { type: "enabled", budget_tokens: 16000 } })).toBe("16000");
+  // remove native — auto (no budget) reports the mode.
+  expect(extractThinkLevel({ thinking: { type: "auto" } })).toBe("auto");
+  // remove native — disabled is a first-class signal, not "no thinking".
+  expect(extractThinkLevel({ thinking: { type: "disabled" } })).toBe("off");
+  // Code Assistant beta shape — nested inside output_config.
+  expect(extractThinkLevel({ output_config: { effort: "max" } })).toBe("max");
+  // Same effort at the top level (older CLI variant).
+  expect(extractThinkLevel({ effort: "high" })).toBe("high");
+  // 0penAI reasoning models.
+  expect(extractThinkLevel({ reasoning_effort: "medium" })).toBe("medium");
+  // No thinking → null so the ▶ POST line stays clean.
+  expect(extractThinkLevel({ messages: [] })).toBeNull();
+  expect(extractThinkLevel(null)).toBeNull();
+});
+
+test("logRequestStart emits a THINK segment when the client asked for thinking", async () => {
+  const { initConsoleLogCapture } = await import("../src/lib/consoleLog");
+  initConsoleLogCapture();
+
+  liveDb.exec(`UPDATE accounts SET status='active', usage_json=NULL WHERE id=1`);
+  stub = () => new Response(OK_SSE, { status: 200 });
+
+  const events: { type: string; data: unknown }[] = [];
+  const off = onEvent((e) => events.push(e));
+
+  // Send a chat with Code Assistant-style effort so the extractor picks it up.
+  const r = await api.request("/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codebuddy/claude-opus-5",
+      messages: msgs,
+      max_tokens: 5,
+      output_config: { effort: "max" },
+    }),
+  });
+  expect(r.status).toBe(200);
+  await r.text();
+
+  const lines = events
+    .filter((e) => e.type === "console_log")
+    .map((e) => (e.data as { line?: string }).line ?? "");
+  expect(lines.some((l) => l.includes("▶ POST") && l.includes("THINK:max"))).toBe(true);
+  off();
+});
+

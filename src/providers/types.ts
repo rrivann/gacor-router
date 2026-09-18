@@ -85,6 +85,10 @@ export interface ChatRequest {
   maxTokens?: number;
   temperature?: number;
   raw?: unknown; // original client payload, for passthrough providers
+  // Human-readable thinking indicator extracted from the client body. Set
+  // by the API layer (api/index.ts) and rendered in the ▶ POST console
+  // log line so operators can see when a request enables reasoning.
+  think?: string | null;
 }
 
 export interface CanonicalMessage {

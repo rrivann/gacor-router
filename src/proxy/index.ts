@@ -132,6 +132,7 @@ export async function proxyChat(
       stream: req.stream === true,
       messages: req.messages.length,
       tools: req.tools?.length ?? 0,
+      think: req.think ?? null,
     });
     const startedAt = Date.now();
 
