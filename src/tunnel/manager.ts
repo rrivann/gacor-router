@@ -126,11 +126,13 @@ async function registerTunnelUrl(shortId: string, tunnelUrl: string): Promise<bo
 export function regenerateShortId(): string {
   const next = generateShortId();
   setSetting(SETTING_SHORT_ID, next);
+  console.info(`[tunnel] shortId: regenerated to ${next} (previous URL invalidated)`);
   return next;
 }
 
 export function setPublicUrlEnabled(enabled: boolean): void {
   setSetting(SETTING_PUBLIC_URL_ENABLED, enabled ? "true" : "false");
+  console.info(`[tunnel] abc-tunnel public URL toggle: ${enabled ? "on" : "off"}`);
 }
 
 // Called at boot: if user's intent is "enabled" but no cloudflared is
@@ -141,6 +143,9 @@ export function setPublicUrlEnabled(enabled: boolean): void {
 export function reconcileTunnel(): void {
   const settingsEnabled = getSetting(SETTING_ENABLED) === "true";
   if (settingsEnabled && !isCloudflaredRunning()) {
+    console.warn(
+      `[tunnel] reconcile: stored state says enabled but cloudflared is not running — wiping stale URL, click Enable to reconnect`
+    );
     setSetting(SETTING_URL, "");
   }
 }
@@ -151,11 +156,13 @@ export async function enableTunnel(localPort: number): Promise<TunnelResult> {
   if (enabling) return enabling;
 
   enabling = (async (): Promise<TunnelResult> => {
+    console.info(`[tunnel] enable: spawning cloudflared on port ${localPort}`);
     try {
       killCloudflared(localPort); // clear any stale process before re-spawning
       const { url } = await spawner(localPort);
       setSetting(SETTING_ENABLED, "true");
       setSetting(SETTING_URL, url);
+      console.info(`[tunnel] enable: cloudflared up — ${url}`);
 
       // Public URL side: reuse an existing shortId (persistent identity)
       // or mint one now on first enable. Register best-effort — a failing
@@ -164,20 +171,28 @@ export async function enableTunnel(localPort: number): Promise<TunnelResult> {
       if (!shortId) {
         shortId = generateShortId();
         setSetting(SETTING_SHORT_ID, shortId);
+        console.info(`[tunnel] shortId: minted new persistent id ${shortId}`);
       }
       let publicUrl: string | null = null;
       if (isPublicUrlEnabled()) {
         const ok = await registerTunnelUrl(shortId, url);
         publicUrl = ok ? publicUrlFor(shortId) : null;
-        if (!ok) {
-          // eslint-disable-next-line no-console
-          console.warn(`[tunnel] abc-tunnel register failed — stable URL disabled for this session`);
+        if (ok) {
+          console.info(`[tunnel] abc-tunnel: registered ${publicUrl} → ${url}`);
+        } else {
+          console.warn(
+            `[tunnel] abc-tunnel register failed — stable URL disabled for this session`
+          );
         }
+      } else {
+        console.info(`[tunnel] abc-tunnel: public URL disabled by setting`);
       }
       return { success: true, url, publicUrl, shortId };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[tunnel] enable failed: ${msg}`);
       setSetting(SETTING_ENABLED, "false");
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return { success: false, error: msg };
     } finally {
       enabling = null;
     }
@@ -187,6 +202,7 @@ export async function enableTunnel(localPort: number): Promise<TunnelResult> {
 }
 
 export function disableTunnel(): TunnelResult {
+  console.info(`[tunnel] disable: killing cloudflared and clearing stored URL`);
   killCloudflared(LOCAL_PORT);
   setSetting(SETTING_ENABLED, "false");
   setSetting(SETTING_URL, "");
