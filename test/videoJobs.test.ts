@@ -52,7 +52,8 @@ new Database(dbPath).exec(`
     dollar_cost real,
     error_message text,
     request_body text,
-    response_body text
+    response_body text,
+    filters_applied text
   );
   CREATE TABLE content_filters (
     id integer primary key autoincrement,

@@ -310,6 +310,22 @@ export default function Requests() {
               </div>
             )}
 
+            {selected.filtersApplied && selected.filtersApplied.length > 0 && (
+              <div className="mb-4 rounded-md border border-border bg-background p-3">
+                <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Filters applied ({selected.filtersApplied.length})
+                </div>
+                <ul className="space-y-1 font-mono text-xs">
+                  {selected.filtersApplied.map((f) => (
+                    <li key={f.id} className="flex items-center justify-between gap-3">
+                      <span className="truncate text-foreground">{f.pattern}</span>
+                      <Badge variant="warning">×{f.hits}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {detailLoading ? (
               <p className="text-sm text-muted-foreground">Loading bodies…</p>
             ) : (

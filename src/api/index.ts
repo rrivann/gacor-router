@@ -238,7 +238,14 @@ function run(
 
   return proxyChat(r.provider, pool, req, {
     signal,
-    tap: loggingTap({ providerName: r.providerName, model: r.model, req, raw: r.body, apiKey }),
+    tap: loggingTap({
+      providerName: r.providerName,
+      model: r.model,
+      req,
+      raw: r.body,
+      apiKey,
+      filtersApplied: filterStats.applied,
+    }),
   });
 }
 

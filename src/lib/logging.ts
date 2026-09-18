@@ -44,6 +44,11 @@ export interface LogContext {
   // Set when the request was authorized by an API key. On success, its
   // tokens_used counter is incremented by total_tokens.
   apiKey?: ApiKeyRow;
+  // Per-rule breakdown of content filters that fired on this request.
+  // Persisted in request_logs.filters_applied so /requests detail drawer
+  // can show which patterns rewrote text. Empty/undefined when no filters
+  // matched — column stays NULL in that case, not [].
+  filtersApplied?: { id: number; pattern: string; hits: number }[];
 }
 
 export function loggingTap(ctx: LogContext) {
@@ -75,6 +80,10 @@ export function loggingTap(ctx: LogContext) {
         stream: ctx.req.stream,
         durationMs: Date.now() - startedAt,
         requestBody: cap(safeStringify(ctx.raw), BODY_CAP),
+        // Keep the column NULL when no filters fired (vs an empty array) so
+        // downstream renders can trivially skip the "Filters applied"
+        // section without checking length.
+        filtersApplied: ctx.filtersApplied && ctx.filtersApplied.length > 0 ? ctx.filtersApplied : null,
         ...outcome,
       });
       // Charge the API key's token quota only on a successful upstream turn;

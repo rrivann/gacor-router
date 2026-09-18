@@ -63,6 +63,12 @@ export interface CreditUsage {
   packages?: UsagePackage[];
 }
 
+export interface FilterApplication {
+  id: number;
+  pattern: string;
+  hits: number;
+}
+
 export interface RequestLogRow {
   id: number;
   createdAt: string;
@@ -86,6 +92,7 @@ export interface RequestLogRow {
   creditUsed: number | null;
   dollarCost: number | null;
   errorMessage: string | null;
+  filtersApplied: FilterApplication[] | null;
 }
 
 export interface RequestLogDetail extends RequestLogRow {

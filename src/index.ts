@@ -12,10 +12,16 @@ import { startAutoWarmScheduler } from "./lib/autowarm";
 import { startVideoPoller } from "./lib/videoPoller";
 import { reconcileTunnel } from "./tunnel/manager";
 import { initConsoleLogCapture } from "./lib/consoleLog";
+import { ensureSchema } from "./db";
 
 // Take over console.{log,info,warn,error,debug} BEFORE anything else logs so
 // the dashboard /console-log page captures the router's full boot sequence.
 initConsoleLogCapture();
+
+// Additive-only migrations for in-place upgrades (columns added after the
+// initial CREATE TABLE that install.sh runs). Idempotent + cheap — safe to
+// call every boot; drops down to a single PRAGMA per tracked table.
+ensureSchema();
 
 const app = new Hono();
 

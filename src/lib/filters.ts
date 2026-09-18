@@ -10,9 +10,28 @@ import { listContentFilters, type ContentFilterRow } from "../db/filters";
 import type { CanonicalMessage } from "../providers/types";
 
 interface CompiledRule {
-  match: (text: string) => string;
+  id: number;
+  pattern: string;
+  // Returns the rewritten string plus a hit count — the count is per-match
+  // so a single rule that fires 3 times shows up as `hits: 3` in the log.
+  match: (text: string) => { next: string; hits: number };
   // null = apply to every provider. Otherwise restricted to these names.
   providerScope: string[] | null;
+}
+
+// Per-rule breakdown of what actually fired on a request. Persisted in
+// request_logs.filters_applied so the /requests detail drawer can render
+// which content filters touched a specific message — useful for debugging
+// unexpected substitutions after the fact.
+export interface FilterApplication {
+  id: number;
+  pattern: string;
+  hits: number;
+}
+
+export interface FilterApplyResult {
+  rewrites: number;
+  applied: FilterApplication[];
 }
 
 let cached: CompiledRule[] | null = null;
@@ -33,7 +52,16 @@ function compile(rows: ContentFilterRow[]): CompiledRule[] {
       const re = new RegExp(src, "g");
       const replacement = row.replacement;
       out.push({
-        match: (text) => text.replace(re, replacement),
+        id: row.id,
+        pattern: row.pattern,
+        match: (text) => {
+          let hits = 0;
+          const next = text.replace(re, () => {
+            hits++;
+            return replacement;
+          });
+          return { next, hits };
+        },
         providerScope: row.providerScope,
       });
     } catch {
@@ -57,22 +85,37 @@ export function invalidateFilters(): void {
 // Rewrite the text of every canonical message in-place. Non-text parts
 // (images, tool calls) pass through untouched. Rules with a non-null
 // providerScope only fire when providerName is listed in that scope.
-export function applyFilters(messages: CanonicalMessage[], providerName: string): { rewrites: number } {
+// Returns the number of message parts that changed (kept for the existing
+// console log line) plus a per-rule breakdown of hits so the request-log
+// row can persist which filters actually did work.
+export function applyFilters(messages: CanonicalMessage[], providerName: string): FilterApplyResult {
   const all = get();
   const rules = all.filter((r) => r.providerScope === null || r.providerScope.includes(providerName));
-  if (rules.length === 0) return { rewrites: 0 };
+  if (rules.length === 0) return { rewrites: 0, applied: [] };
 
   let rewrites = 0;
+  const perRule = new Map<number, FilterApplication>();
   for (const msg of messages) {
     for (const part of msg.parts) {
       if (part.type !== "text" || typeof part.text !== "string" || part.text.length === 0) continue;
       let next = part.text;
-      for (const rule of rules) next = rule.match(next);
+      for (const rule of rules) {
+        const result = rule.match(next);
+        if (result.hits > 0) {
+          const existing = perRule.get(rule.id);
+          if (existing) {
+            existing.hits += result.hits;
+          } else {
+            perRule.set(rule.id, { id: rule.id, pattern: rule.pattern, hits: result.hits });
+          }
+          next = result.next;
+        }
+      }
       if (next !== part.text) {
         part.text = next;
         rewrites++;
       }
     }
   }
-  return { rewrites };
+  return { rewrites, applied: [...perRule.values()] };
 }

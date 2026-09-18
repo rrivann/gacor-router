@@ -6,6 +6,12 @@ import { desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "./index";
 import { accounts, requestLogs } from "./schema";
 
+export interface FilterApplicationRow {
+  id: number;
+  pattern: string;
+  hits: number;
+}
+
 export interface RequestLogInsert {
   provider: string;
   model?: string | null;
@@ -28,6 +34,7 @@ export interface RequestLogInsert {
   errorMessage?: string | null;
   requestBody?: string | null;
   responseBody?: string | null;
+  filtersApplied?: FilterApplicationRow[] | null;
 }
 
 // The row shape the list endpoint returns — everything except the bodies.
@@ -54,6 +61,7 @@ export interface RequestLogRow {
   creditUsed: number | null;
   dollarCost: number | null;
   errorMessage: string | null;
+  filtersApplied: FilterApplicationRow[] | null;
 }
 
 const LIST_COLUMNS = {
@@ -79,6 +87,7 @@ const LIST_COLUMNS = {
   creditUsed: requestLogs.creditUsed,
   dollarCost: requestLogs.dollarCost,
   errorMessage: requestLogs.errorMessage,
+  filtersApplied: requestLogs.filtersApplied,
 } as const;
 
 export function insertRequestLog(row: RequestLogInsert): number {

@@ -155,6 +155,12 @@ export const requestLogs = sqliteTable(
     errorMessage: text("error_message"),
     requestBody: text("request_body"),
     responseBody: text("response_body"),
+    // Per-rule breakdown of content filters that fired on this request
+    // (id + pattern + hit count). Null when the request had no filter
+    // matches or predates v0.3.11. Rendered in /requests detail drawer.
+    filtersApplied: text("filters_applied", { mode: "json" }).$type<
+      { id: number; pattern: string; hits: number }[]
+    >(),
   },
   (t) => [
     index("idx_request_logs_created").on(t.createdAt),

@@ -49,7 +49,8 @@ new Database(dbPath).exec(`
     dollar_cost real,
     error_message text,
     request_body text,
-    response_body text
+    response_body text,
+    filters_applied text
   );
   CREATE TABLE content_filters (
     id integer primary key autoincrement,
@@ -1660,6 +1661,68 @@ test("a successful chat emits 9router-style ▶ POST and 📊 DONE console lines
   expect(lines.some((l) => l.includes("📊 DONE") && l.includes("OUT 1"))).toBe(true);
   off();
 });
+
+test("applyFilters returns per-rule breakdown with hits counted per replacement", async () => {
+  const { applyFilters } = await import("../src/lib/filters");
+  const { invalidateFilters } = await import("../src/lib/filters");
+  // Insert 2 filters via DB directly + invalidate cache so applyFilters
+  // sees them.
+  liveDb.exec(`DELETE FROM content_filters`);
+  liveDb.exec(`INSERT INTO content_filters (id,pattern,replacement,is_regex,is_active,sort,created_at)
+               VALUES (100,'foo','bar',0,1,0,0), (101,'ping','pong',0,1,1,0)`);
+  invalidateFilters();
+
+  // 3 hits on rule 100 (spread across 2 message parts) + 1 hit on rule 101.
+  const messages: any[] = [
+    { role: "user", parts: [{ type: "text", text: "foo foo hello" }] },
+    { role: "user", parts: [{ type: "text", text: "foo ping" }] },
+  ];
+  const result = applyFilters(messages, "codebuddy");
+  expect(result.rewrites).toBe(2); // 2 parts changed
+  const applied = result.applied.sort((a, b) => a.id - b.id);
+  expect(applied).toEqual([
+    { id: 100, pattern: "foo", hits: 3 },
+    { id: 101, pattern: "ping", hits: 1 },
+  ]);
+  // Parts were mutated in place.
+  expect(messages[0].parts[0].text).toBe("bar bar hello");
+  expect(messages[1].parts[0].text).toBe("bar pong");
+
+  liveDb.exec(`DELETE FROM content_filters`);
+  invalidateFilters();
+});
+
+test("a chat with active filters persists filters_applied and returns it via /stats/requests/:id", async () => {
+  const { invalidateFilters } = await import("../src/lib/filters");
+  liveDb.exec(`DELETE FROM content_filters`);
+  liveDb.exec(`INSERT INTO content_filters (id,pattern,replacement,is_regex,is_active,sort,created_at)
+               VALUES (200,'secret','[REDACTED]',0,1,0,0)`);
+  invalidateFilters();
+  liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
+  stub = () => new Response(OK_SSE, { status: 200 });
+
+  const before = logRows().length;
+  const r = await chat({
+    model: "codebuddy/claude-opus-5",
+    messages: [{ role: "user", content: "the secret is 42, keep the secret" }],
+  });
+  expect(r.status).toBe(200);
+  await r.text();
+
+  const rows = logRows();
+  expect(rows.length).toBe(before + 1);
+  const row = rows[rows.length - 1]!;
+  const parsed = JSON.parse(row.filters_applied as string);
+  expect(parsed).toEqual([{ id: 200, pattern: "secret", hits: 2 }]);
+
+  // Endpoint round-trips the same shape.
+  const detail = await (await manage.request(`/stats/requests/${row.id}`)).json();
+  expect(detail.data.filtersApplied).toEqual([{ id: 200, pattern: "secret", hits: 2 }]);
+
+  liveDb.exec(`DELETE FROM content_filters`);
+  invalidateFilters();
+});
+
 
 test("a rotation through an exhausted account leaves a full ✗ / ⚠️ / ▶ trace", async () => {
   // First account fires 429 quota → auto-disable + fallback logs.
