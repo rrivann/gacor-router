@@ -86,7 +86,12 @@ export async function proxyChat(
   const name = provider.name();
   const tried = new Set<number>();
   const attempts: Attempt[] = [];
-  const maxAttempts = opts.maxAttempts ?? 5;
+  // Default: rotate through every eligible account until the pool runs
+  // out. pool.pick() returns null when there's nothing left to try
+  // (tried set + status filter), so the loop terminates naturally on
+  // "all accounts exhausted" without needing an artificial numeric cap.
+  // Tests still override with a finite value.
+  const maxAttempts = opts.maxAttempts ?? Number.POSITIVE_INFINITY;
 
   // Route the terminal outcome through the tap without duplicating it at
   // every exit. The tap's returned generator is what the caller sees.
@@ -213,7 +218,12 @@ export async function proxyImage(
   const name = provider.name();
   const tried = new Set<number>();
   const attempts: Attempt[] = [];
-  const maxAttempts = opts.maxAttempts ?? 5;
+  // Default: rotate through every eligible account until the pool runs
+  // out. pool.pick() returns null when there's nothing left to try
+  // (tried set + status filter), so the loop terminates naturally on
+  // "all accounts exhausted" without needing an artificial numeric cap.
+  // Tests still override with a finite value.
+  const maxAttempts = opts.maxAttempts ?? Number.POSITIVE_INFINITY;
 
   while (attempts.length < maxAttempts) {
     let account = pool.pick(name, tried);
@@ -304,7 +314,12 @@ export async function proxyVideo(
   const name = provider.name();
   const tried = new Set<number>();
   const attempts: Attempt[] = [];
-  const maxAttempts = opts.maxAttempts ?? 5;
+  // Default: rotate through every eligible account until the pool runs
+  // out. pool.pick() returns null when there's nothing left to try
+  // (tried set + status filter), so the loop terminates naturally on
+  // "all accounts exhausted" without needing an artificial numeric cap.
+  // Tests still override with a finite value.
+  const maxAttempts = opts.maxAttempts ?? Number.POSITIVE_INFINITY;
 
   while (attempts.length < maxAttempts) {
     let account = pool.pick(name, tried);

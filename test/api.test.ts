@@ -886,6 +886,38 @@ test("a dead upstream persists an error row with the attempt log", async () => {
   liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
 });
 
+test("rotation exhausts every active account when none survive (no artificial 5-attempt cap)", async () => {
+  // 7 accounts, all quota-exhausted 429. The old hardcoded maxAttempts=5
+  // would stop after 5 rotations even though 2 more accounts were still
+  // waiting to be tried. Now every eligible account is attempted — pool
+  // .pick() returns null when there's nothing left, and that's what ends
+  // the loop.
+  liveDb.exec(`DELETE FROM accounts`);
+  for (let id = 1; id <= 7; id++) {
+    liveDb.exec(
+      `INSERT INTO accounts (id,provider,label,secret,status,created_at)
+       VALUES (${id},'codebuddy','acc-${id}','token-${id}','active',0)`
+    );
+  }
+  stub = () => new Response(`{"error":"insufficient_quota"}`, { status: 429 });
+
+  const r = await chat({ model: "codebuddy/claude-opus-5", messages: msgs });
+  expect(r.status).toBe(429); // pure-exhausted → rate_limit_error shape
+
+  // Every account should now be flipped to "exhausted" — proving all 7
+  // were actually attempted rather than the old cap of 5.
+  const rows = liveDb.query("SELECT id, status FROM accounts ORDER BY id").all() as { id: number; status: string }[];
+  expect(rows.length).toBe(7);
+  for (const row of rows) {
+    expect(row.status).toBe("exhausted");
+  }
+
+  // Reset for later tests.
+  liveDb.exec(`DELETE FROM accounts WHERE id > 1`);
+  liveDb.exec(`UPDATE accounts SET status='active', usage_json=NULL WHERE id=1`);
+});
+
+
 test("an upstream 500 persists an error row with httpStatus", async () => {
   stub = () => new Response("upstream exploded", { status: 500 });
   const before = logRows().length;
