@@ -6,9 +6,10 @@
 import { registry } from "../providers";
 import { getAccount, listAccounts, setAccountStatus, updateLabel } from "../db/accounts";
 import { insertRequestLog } from "../db/logs";
+import { emitRequestLogRow } from "./logging";
 import { fetchAndCacheUsage, UsageError } from "./usage";
 import { deriveLabel } from "./label";
-import { emit, EV_ACCOUNT_STATUS, EV_REQUEST_LOG } from "./events";
+import { emit, EV_ACCOUNT_STATUS } from "./events";
 import type { Account, Outcome } from "../providers/types";
 
 // A valid, cheap model accepted by each provider's upstream — enowx probes
@@ -148,17 +149,9 @@ export async function warmAccount(
     errorMessage: outcome === "ok" ? null : (errBody.slice(0, 300) || outcome),
     responseBody: errBody.slice(0, 2048) || null,
   });
-  emit(EV_REQUEST_LOG, {
-    id: logId,
-    provider: row.provider,
-    model,
-    accountId: acc.id,
-    accountLabel: acc.label,
-    status: outcome === "ok" ? "success" : "error",
-    source: "warmup",
-    durationMs: Date.now() - startedAt,
-    errorMessage: outcome === "ok" ? null : outcome,
-  });
+  // Emit the full row shape via the shared helper — subscribers see the same
+  // envelope as chat/video request_log events.
+  emitRequestLogRow(logId);
 
   // Refresh the credit snapshot on success when the provider meters it.
   if (opts.refreshCredit !== false && outcome === "ok" && provider.usage) {

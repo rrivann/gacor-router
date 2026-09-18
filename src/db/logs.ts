@@ -114,6 +114,14 @@ export function getRequestLog(id: number) {
   return db.select().from(requestLogs).where(eq(requestLogs.id, id)).get();
 }
 
+// Same shape as listRequestLogs but for a single id — used by the WS event
+// emitter so subscribers get a ready-to-render RequestLogRow without a
+// second fetch. Reading through the same LIST_COLUMNS projection guarantees
+// emit payload never drifts from what the /stats/requests list returns.
+export function getRequestLogRow(id: number): RequestLogRow | undefined {
+  return db.select(LIST_COLUMNS).from(requestLogs).where(eq(requestLogs.id, id)).get();
+}
+
 // Patch an existing row. Used by the video poller to fill in final cost +
 // duration after the async render finishes — the submit-time row starts with
 // only the HTTP round-trip timing and no usage numbers.

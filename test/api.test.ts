@@ -795,7 +795,24 @@ test("a successful chat persists a success row and emits request_log", async () 
 
   const reqEvents = events.filter((e) => e.type === "request_log");
   expect(reqEvents).toHaveLength(1);
-  expect((reqEvents[0]!.data as { status: string }).status).toBe("success");
+  const evData = reqEvents[0]!.data as Record<string, unknown>;
+  // Full RequestLogRow shape — /requests page renders live without a
+  // placeholder-then-refill flash. Every field the list endpoint returns
+  // MUST be present so the frontend can trust the payload.
+  expect(evData.status).toBe("success");
+  expect(evData.id).toBeDefined();
+  expect(evData.createdAt).toBeDefined();
+  expect(typeof evData.createdAt).toBe("string");
+  expect(evData.stream).toBeDefined();
+  expect(evData.source).toBeDefined();
+  expect(evData.totalTokens).toBe(4);
+  expect(evData.cachedTokens).toBeDefined(); // may be null but must be present
+  expect(evData.cacheWriteTokens).toBeDefined();
+  expect(evData.reasoningTokens).toBeDefined();
+  expect(evData.ttftMs).toBeDefined();
+  expect(evData.dollarCost).toBeDefined();
+  // Rich internal `attempts` still carried as extras alongside the row.
+  expect(Array.isArray((evData as { attempts?: unknown }).attempts)).toBe(true);
   off();
 });
 

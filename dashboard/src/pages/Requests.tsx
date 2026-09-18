@@ -45,38 +45,24 @@ export default function Requests() {
     load();
   }, [load]);
 
-  // Live: new finished requests prepend themselves. The event shape matches
-  // the list row minus createdAt/stream/outcome, which the next refresh
-  // fills in.
+  // Live: backend emits the FULL RequestLogRow shape (matching the
+  // /api/stats/requests list endpoint). Chat requests fire once; video
+  // jobs fire twice — submit + completion — and the second event carries
+  // the final creditUsed/tokens/durationMs. Replace in place so the
+  // completed video row updates without needing Refresh.
   useWsEvent("request_log", (msg) => {
-    const ev = msg.data as Partial<RequestLogRow> & { id: number };
+    const ev = msg.data as RequestLogRow;
+    // Filter drops events for other providers when a filter is active. The
+    // dedicated `all` value means no filter.
+    if (provider !== "all" && ev.provider !== provider) return;
     setLogs((current) => {
-      if (current.some((r) => r.id === ev.id)) return current;
-      const row: RequestLogRow = {
-        createdAt: new Date().toISOString(),
-        stream: false,
-        source: "proxy",
-        outcome: null,
-        model: null,
-        accountId: null,
-        accountLabel: null,
-        httpStatus: null,
-        durationMs: null,
-        promptTokens: null,
-        completionTokens: null,
-        totalTokens: null,
-        cachedTokens: null,
-        cacheWriteTokens: null,
-        reasoningTokens: null,
-        ttftMs: null,
-        creditUsed: null,
-        dollarCost: null,
-        errorMessage: null,
-        ...ev,
-        provider: ev.provider ?? "",
-        status: ev.status ?? "error",
-      } as RequestLogRow;
-      return [row, ...current].slice(0, 200);
+      const idx = current.findIndex((r) => r.id === ev.id);
+      if (idx >= 0) {
+        const next = current.slice();
+        next[idx] = ev;
+        return next;
+      }
+      return [ev, ...current].slice(0, 200);
     });
   });
 

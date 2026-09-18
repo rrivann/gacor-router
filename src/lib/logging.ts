@@ -7,10 +7,24 @@
 
 import type { ChatRequest, StreamEvent } from "../providers/types";
 import type { Attempt, NoAccountError, TapResult, UpstreamError } from "../proxy";
-import { insertRequestLog } from "../db/logs";
+import { getRequestLogRow, insertRequestLog } from "../db/logs";
 import { computeDollarCost } from "./pricing";
 import { addApiKeyUsage, type ApiKeyRow } from "../db/apiKeys";
 import { emit, EV_REQUEST_LOG } from "./events";
+
+// Emit the full RequestLogRow (same shape as /api/stats/requests returns)
+// so WS subscribers can render immediately without a follow-up fetch. Reads
+// back from DB once — one indexed lookup — and guarantees emit payload
+// never drifts from list-endpoint shape.
+export function emitRequestLogRow(id: number, extras?: Record<string, unknown>): void {
+  const row = getRequestLogRow(id);
+  if (!row) return;
+  // Dates serialize as ISO strings in JSON, but be explicit so subscribers
+  // that don't JSON.stringify get a consistent shape.
+  const createdAt =
+    row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt);
+  emit(EV_REQUEST_LOG, { ...row, createdAt, ...extras });
+}
 
 // Bodies are stored for the detail drawer, but a runaway upstream shouldn't
 // be able to grow the DB without bound.
@@ -71,21 +85,11 @@ export function loggingTap(ctx: LogContext) {
         const completion = outcome.completionTokens ?? 0;
         addApiKeyUsage(ctx.apiKey.id, prompt + completion);
       }
-      emit(EV_REQUEST_LOG, {
-        id,
-        provider: ctx.providerName,
-        model: ctx.model,
-        accountId: account?.id ?? null,
-        accountLabel: account?.label ?? null,
-        status: outcome.status,
-        httpStatus: outcome.httpStatus ?? null,
-        durationMs: Date.now() - startedAt,
-        promptTokens: outcome.promptTokens ?? null,
-        completionTokens: outcome.completionTokens ?? null,
-        creditUsed: outcome.creditUsed ?? null,
-        errorMessage: outcome.errorMessage ?? null,
-        attempts: attempts.map(attemptSummary),
-      });
+      // Emit the full row shape — RequestLogRow-compatible — so /requests
+      // renders live without a placeholder-then-refill flash. `attempts` is
+      // a rich internal field that only the detail drawer consumes; carry
+      // it as extras so the row stays lean for the list view.
+      emitRequestLogRow(id, { attempts: attempts.map(attemptSummary) });
     }
 
     // The request never produced a stream — every account failed, or the

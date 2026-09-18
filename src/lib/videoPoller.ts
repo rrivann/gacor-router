@@ -17,7 +17,8 @@ import { getAccount, updateCreds } from "../db/accounts";
 import { listPendingJobs, markCompleted, markFailed, updateVideoJob, getVideoJob } from "../db/videoJobs";
 import { addApiKeyUsage } from "../db/apiKeys";
 import { updateRequestLog, getRequestLog } from "../db/logs";
-import { emit, EV_REQUEST_LOG, EV_VIDEO_STATUS } from "./events";
+import { emitRequestLogRow } from "./logging";
+import { emit, EV_VIDEO_STATUS } from "./events";
 import type { Account, Provider, VideoPollResult } from "../providers/types";
 
 // mp4s land here. Kept alongside the DB so a `rsync` of the project directory
@@ -137,22 +138,9 @@ async function downloadAndFinalize(
         creditUsed: result.credit ?? 0,
         durationMs: Date.now() - submitAt,
       });
-      // Re-emit request_log so the Requests page live-updates the row in place.
-      emit(EV_REQUEST_LOG, {
-        id: job.requestLogId,
-        provider: submitRow?.provider ?? "codebuddy",
-        model: submitRow?.model ?? null,
-        accountId: submitRow?.accountId ?? null,
-        accountLabel: submitRow?.accountLabel ?? null,
-        status: "success",
-        httpStatus: 200,
-        durationMs: Date.now() - submitAt,
-        promptTokens: submitRow?.promptTokens ?? null,
-        completionTokens: tokensCharge,
-        creditUsed: result.credit ?? 0,
-        errorMessage: null,
-        attempts: [],
-      });
+      // Re-emit request_log with the FULL updated row so the Requests page
+      // replaces the submit-time row in place with final creditUsed/tokens.
+      emitRequestLogRow(job.requestLogId);
     }
     emit(EV_VIDEO_STATUS, videoEventPayload(jobId));
   } catch (err) {
