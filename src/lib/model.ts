@@ -4,6 +4,7 @@
 // Without a prefix we fall back to the `default_provider` setting.
 
 import { getSetting } from "../db/accounts";
+import { resolveAlias } from "./modelAliases";
 
 export interface Route {
   provider: string;
@@ -11,11 +12,18 @@ export interface Route {
 }
 
 export function resolveModel(raw: string): Route | null {
-  const slash = raw.indexOf("/");
-  if (slash > 0 && slash < raw.length - 1) {
-    return { provider: raw.slice(0, slash), model: raw.slice(slash + 1) };
+  // Alias short-circuit — remove-native IDs (`claude-opus-4-7[1m]`) map to a
+  // canonical `provider/model` string before the normal split runs. Keeps
+  // Code Assistant's hardcoded whitelist happy without duplicating registry
+  // entries.
+  const aliased = resolveAlias(raw);
+  const source = aliased ?? raw;
+
+  const slash = source.indexOf("/");
+  if (slash > 0 && slash < source.length - 1) {
+    return { provider: source.slice(0, slash), model: source.slice(slash + 1) };
   }
   const fallback = getSetting("default_provider");
   if (!fallback) return null;
-  return { provider: fallback, model: raw };
+  return { provider: fallback, model: source };
 }

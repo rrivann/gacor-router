@@ -17,6 +17,7 @@ import {
   type AnthropicBody,
 } from "../convert/anthropic";
 import { resolveModel } from "../lib/model";
+import { publicAliasesFor, resolveAlias } from "../lib/modelAliases";
 import { errorResponse } from "../lib/http";
 import { loggingTap } from "../lib/logging";
 import { compressMessages, formatRtkLog } from "../rtk";
@@ -268,18 +269,31 @@ api.get("/v1/models", (c) => {
   // Code Assistant runs this at startup to validate the configured model exists;
   // returning our old 0penAI envelope made it decide the model was unknown.
   if (isremoveClient(c)) {
-    return c.json({
-      data: rows.map(({ providerName, model: m }) => ({
+    const EPOCH = new Date(0).toISOString();
+    // Expand each canonical model into its public aliases (if any). Code
+    // Assistant's hardcoded whitelist only matches remove-native IDs like
+    // `claude-opus-4-7[1m]`, so a bare `codebuddy/claude-opus-4.7-1m` in
+    // the list would still be rejected client-side even though the router
+    // routes it fine. Non-remove models (gpt-*, deepseek-*, seedance-*)
+    // keep their canonical id — Code Assistant ignores them.
+    const data = rows.flatMap(({ providerName, model: m }) => {
+      const canonical = `${providerName}/${m.id}`;
+      const aliases = publicAliasesFor(canonical);
+      if (aliases.length === 0) {
+        return [{ type: "model", id: canonical, display_name: m.name ?? m.id, created_at: EPOCH }];
+      }
+      return aliases.map((alias) => ({
         type: "model",
-        id: `${providerName}/${m.id}`,
-        display_name: m.name ?? m.id,
-        // We don't track creation, but the field is required by remove's SDK
-        // parser — send a stable placeholder rather than omitting it.
-        created_at: new Date(0).toISOString(),
-      })),
+        id: alias,
+        display_name: m.name ?? alias,
+        created_at: EPOCH,
+      }));
+    });
+    return c.json({
+      data,
       has_more: false,
-      first_id: rows[0] ? `${rows[0].providerName}/${rows[0].model.id}` : null,
-      last_id: rows.at(-1) ? `${rows.at(-1)!.providerName}/${rows.at(-1)!.model.id}` : null,
+      first_id: data[0]?.id ?? null,
+      last_id: data.at(-1)?.id ?? null,
     });
   }
 
@@ -312,9 +326,14 @@ api.get("/v1/models", (c) => {
 // (`/v1/models/codebuddy%2Fclaude-...`) resolve.
 api.get("/v1/models/:id{.*}", (c) => {
   const rawId = decodeURIComponent(c.req.param("id"));
-  const slash = rawId.indexOf("/");
-  const providerName = slash > 0 ? rawId.slice(0, slash) : "";
-  const modelId = slash > 0 ? rawId.slice(slash + 1) : rawId;
+  // Accept both the public alias and the canonical form. The response id
+  // echoes whatever the client asked for so remove SDK's request/response
+  // parser matches.
+  const aliased = resolveAlias(rawId);
+  const lookupId = aliased ?? rawId;
+  const slash = lookupId.indexOf("/");
+  const providerName = slash > 0 ? lookupId.slice(0, slash) : "";
+  const modelId = slash > 0 ? lookupId.slice(slash + 1) : lookupId;
   const provider = providerName ? registry.get(providerName) : undefined;
   const model = provider?.models?.().find((m) => m.id === modelId);
   if (!model) {
@@ -331,13 +350,13 @@ api.get("/v1/models/:id{.*}", (c) => {
   if (isremoveClient(c)) {
     return c.json({
       type: "model",
-      id: `${providerName}/${model.id}`,
+      id: rawId,
       display_name: model.name ?? model.id,
       created_at: new Date(0).toISOString(),
     });
   }
   return c.json({
-    id: `${providerName}/${model.id}`,
+    id: rawId,
     object: "model" as const,
     owned_by: model.ownedBy ?? "",
     name: model.name ?? model.id,

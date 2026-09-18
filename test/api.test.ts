@@ -182,7 +182,10 @@ test("an unknown provider is a 501 that lists what is available", async () => {
 });
 
 test("a bare model id without default_provider is a 400", async () => {
-  const r = await chat({ model: "claude-opus-5", messages: msgs });
+  // Use a name that isn't in the model alias table — a whitelist entry
+  // like "claude-opus-5" would auto-resolve to codebuddy and this test
+  // is specifically about the no-alias / no-fallback path.
+  const r = await chat({ model: "unknown-bare-model", messages: msgs });
   expect(r.status).toBe(400);
   expect((await r.json()).error.message).toContain("default_provider");
 });
@@ -332,6 +335,40 @@ test("/v1/models/:id returns 404 with the right envelope per client", async () =
   expect(openai.status).toBe(404);
   const obody = await openai.json();
   expect(obody.error.message).toContain("nope-model");
+});
+
+test("resolveModel unwraps a native alias to provider/model", async () => {
+  const { resolveModel } = await import("../src/lib/model");
+  const route = resolveModel("claude-opus-4-7[1m]");
+  expect(route).toEqual({ provider: "codebuddy", model: "claude-opus-4.7-1m" });
+});
+
+test("/v1/models remove shape lists aliases the client whitelists", async () => {
+  const r = await api.request("/v1/models", {
+    headers: { "anthr0pic-version": "2023-06-01" },
+  });
+  const body = await r.json();
+  const ids: string[] = body.data.map((m: { id: string }) => m.id);
+  expect(ids).toContain("claude-opus-4-7[1m]");
+  expect(ids).toContain("claude-opus-4-7");
+  expect(ids).toContain("claude-opus-5");
+  expect(ids).toContain("claude-sonnet-4-6");
+  // Non-remove models keep their canonical id — the alias table only covers
+  // the CL4ude family.
+  expect(ids).toContain("codebuddy/gpt-6-astra");
+});
+
+test("/v1/models/:id resolves an alias and echoes the requested id", async () => {
+  const encoded = encodeURIComponent("claude-opus-4-7[1m]");
+  const r = await api.request(`/v1/models/${encoded}`, {
+    headers: { "anthr0pic-version": "2023-06-01" },
+  });
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(body.type).toBe("model");
+  // Response id echoes the alias the client asked for, not the canonical —
+  // remove SDK matches request vs response by id.
+  expect(body.id).toBe("claude-opus-4-7[1m]");
 });
 
 // ── /v1/messages (Anthropic-compatible) ──────────────────────────
