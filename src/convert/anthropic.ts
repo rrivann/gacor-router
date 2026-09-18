@@ -319,10 +319,11 @@ export async function* toAnthropicEvents(
   let finish: FinishReason | undefined;
   let sawToolCall = false;
 
-  const start = (m?: string): AnthropicEvent[] => {
+  const start = (): AnthropicEvent[] => {
     if (started) return [];
     started = true;
-    if (m) seenModel = m;
+    // Deliberately DO NOT accept a model hint here — the caller's `model`
+    // param is the source of truth (see /v1/messages: client-sent id).
     return [
       {
         type: "message_start",
@@ -354,7 +355,7 @@ export async function* toAnthropicEvents(
   try {
     for await (const ev of events) {
       const out: AnthropicEvent[] = [];
-      if (!started) out.push(...start(ev.model));
+      if (!started) out.push(...start());
       // Deliberately DO NOT overwrite seenModel from upstream events —
     // Anthropic clients validate the response.model against their request
     // and their hardcoded whitelist. The caller passes the client-sent id

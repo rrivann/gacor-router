@@ -366,9 +366,13 @@ test("an empty stream still produces a well-formed message envelope", async () =
   expect(evs.at(-2).delta.stop_reason).toBe("end_turn");
 });
 
-test("a model reported mid-stream overrides the requested id", async () => {
-  const evs = await events({ text: "a", model: "actual-model" });
-  expect(evs[0].message.model).toBe("actual-model");
+test("upstream model in a stream event does NOT override the caller-supplied id", async () => {
+  // Anthropic clients (Claude Code) validate response.model against their
+  // hardcoded whitelist. Leaking the upstream's canonical name would fail
+  // that check even though the request succeeded. The caller-supplied id is
+  // the source of truth for the /v1/messages envelope.
+  const evs = await events({ text: "a", model: "actual-upstream-name" });
+  expect(evs[0].message.model).toBe("m");
 });
 
 // The status line is long gone once the stream breaks, so the failure has to

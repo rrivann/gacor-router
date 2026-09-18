@@ -435,6 +435,31 @@ test("/v1/messages echoes the client-sent model even when upstream reports a dif
   expect(body.model).toBe("claude-opus-4-7[1m]");
 });
 
+test("/v1/messages stream echoes the client-sent model in message_start", async () => {
+  // Same guard as the non-stream test, but for the SSE path — Claude Code
+  // sends stream:true by default, and the message_start.message.model must
+  // still be the client-sent id, not the upstream's canonical name.
+  const rogue = [
+    'data: {"model":"claude-upstream-fake","choices":[{"delta":{"role":"assistant","content":"hi"}}]}',
+    'data: {"choices":[{"delta":{"content":" there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}',
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  stub = () => new Response(rogue, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  const r = await chat(
+    { model: "claude-opus-4-7[1m]", messages: msgs, max_tokens: 64, stream: true },
+    "/v1/messages"
+  );
+  expect(r.status).toBe(200);
+  const text = await r.text();
+  // Extract the message_start event's JSON and assert the model field.
+  const startMatch = text.match(/event: message_start\ndata: (\{[^\n]+\})/);
+  expect(startMatch).not.toBeNull();
+  const startPayload = JSON.parse(startMatch![1]);
+  expect(startPayload.message.model).toBe("claude-opus-4-7[1m]");
+});
+
+
 
 // The Anthropic system field is a sibling of messages, not a message; it has
 // to reach the upstream as the leading system turn.
