@@ -668,6 +668,86 @@ test("tunnel enable persists URL and status reflects it", async () => {
   setRunningOverrideForTests(null);
 });
 
+test("tunnel enable mints a persistent shortId and stable public URL", async () => {
+  setSpawnerForTests(async () => ({ url: "https://persist-test.trycloudflare.com" }));
+  setRunningOverrideForTests(() => true);
+
+  // Reset settings so we exercise the mint-fresh path.
+  liveDb.exec("DELETE FROM settings WHERE key LIKE 'tunnel_%'");
+
+  const first = await manage.request("/tunnel/enable", { method: "POST" });
+  expect(first.status).toBe(200);
+  const firstBody = await first.json();
+  expect(typeof firstBody.shortId).toBe("string");
+  expect(firstBody.shortId).toHaveLength(6);
+
+  const status1 = await (await manage.request("/tunnel/status")).json();
+  expect(status1.shortId).toBe(firstBody.shortId);
+  expect(status1.publicUrl).toBe(`https://r${firstBody.shortId}.abc-tunnel.us`);
+  expect(status1.publicUrlEnabled).toBe(true);
+
+  // Disable then re-enable — the shortId must be reused so bookmarks stay valid.
+  await manage.request("/tunnel/disable", { method: "POST" });
+  const second = await manage.request("/tunnel/enable", { method: "POST" });
+  const secondBody = await second.json();
+  expect(secondBody.shortId).toBe(firstBody.shortId);
+
+  setRunningOverrideForTests(null);
+});
+
+test("PUT /api/tunnel/public-url toggles the feature and hides the stable URL when off", async () => {
+  setSpawnerForTests(async () => ({ url: "https://toggle-test.trycloudflare.com" }));
+  setRunningOverrideForTests(() => true);
+
+  liveDb.exec("DELETE FROM settings WHERE key LIKE 'tunnel_%'");
+  await manage.request("/tunnel/enable", { method: "POST" });
+
+  // Turn public URL off.
+  const off = await manage.request("/tunnel/public-url", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: false }),
+  });
+  expect(off.status).toBe(200);
+  expect((await off.json()).enabled).toBe(false);
+
+  const statusOff = await (await manage.request("/tunnel/status")).json();
+  expect(statusOff.publicUrlEnabled).toBe(false);
+  expect(statusOff.publicUrl).toBeNull();
+  // Direct URL and shortId are unaffected.
+  expect(statusOff.url).toBe("https://toggle-test.trycloudflare.com");
+  expect(typeof statusOff.shortId).toBe("string");
+
+  // Malformed payload → 400.
+  const bad = await manage.request("/tunnel/public-url", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  expect(bad.status).toBe(400);
+
+  setRunningOverrideForTests(null);
+});
+
+test("POST /api/tunnel/regenerate-short-id mints a new id, invalidating the old one", async () => {
+  liveDb.exec("DELETE FROM settings WHERE key LIKE 'tunnel_%'");
+  setSpawnerForTests(async () => ({ url: "https://regen-test.trycloudflare.com" }));
+  setRunningOverrideForTests(() => true);
+  const enable = await (await manage.request("/tunnel/enable", { method: "POST" })).json();
+  const oldId = enable.shortId as string;
+
+  const regen = await manage.request("/tunnel/regenerate-short-id", { method: "POST" });
+  expect(regen.status).toBe(200);
+  const regenBody = await regen.json();
+  expect(regenBody.shortId).toHaveLength(6);
+  expect(regenBody.shortId).not.toBe(oldId);
+
+  const status = await (await manage.request("/tunnel/status")).json();
+  expect(status.shortId).toBe(regenBody.shortId);
+
+  setRunningOverrideForTests(null);
+});
+
 test("status reports disconnected when settings say enabled but cloudflared is dead", async () => {
   // Set up: enable with fake liveness so URL persists.
   setSpawnerForTests(async () => ({ url: "https://coherent-abc.trycloudflare.com" }));

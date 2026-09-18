@@ -5,6 +5,7 @@
 import { test, expect, afterAll } from "bun:test";
 import { parseQuickTunnelUrl } from "../src/tunnel/cloudflared";
 import { clearPid, isPidAlive, loadPid, savePid } from "../src/tunnel/pid";
+import { generateShortId, publicUrlFor } from "../src/tunnel/config";
 
 const SAMPLE_LOG = `
 2026-09-14T10:00:00Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick tunnel.
@@ -67,4 +68,25 @@ test("isPidAlive reports true for the current process", () => {
 test("isPidAlive reports false for a very high fictional pid", () => {
   // 2^31 - 1: high enough that no real process should own it on any OS.
   expect(isPidAlive(2147483646)).toBe(false);
+});
+
+// ── abc-tunnel.us shortId helper ─────────────────────────────────
+
+test("generateShortId yields a 6-char string from the allowed alphabet", () => {
+  const id = generateShortId();
+  expect(id).toHaveLength(6);
+  // Same alphabet 9router picked — excludes visually confusing o/l/0/1.
+  expect(id).toMatch(/^[abcdefghijklmnpqrstuvwxyz23456789]{6}$/);
+});
+
+test("generateShortId produces different values on repeated calls", () => {
+  // Not a strict guarantee — with a 32-char alphabet and 6 chars that's ~1B
+  // possibilities, so a collision across 10 draws is astronomically unlikely.
+  const seen = new Set<string>();
+  for (let i = 0; i < 10; i++) seen.add(generateShortId());
+  expect(seen.size).toBeGreaterThan(1);
+});
+
+test("publicUrlFor composes the expected r<id>.abc-tunnel.us shape", () => {
+  expect(publicUrlFor("abc123")).toBe("https://rabc123.abc-tunnel.us");
 });

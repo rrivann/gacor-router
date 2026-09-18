@@ -272,6 +272,11 @@ export interface TunnelStatus {
   settingsEnabled: boolean;
   running: boolean;
   url: string | null;
+  // Stable public URL via abc-tunnel.us. Null when the feature is off,
+  // the tunnel is dead, or the shortId hasn't been minted yet.
+  publicUrl: string | null;
+  publicUrlEnabled: boolean;
+  shortId: string | null;
   enabling: boolean;
   download: { downloading: boolean; progress: number; error: string | null };
 }
@@ -283,6 +288,17 @@ export const enableTunnel = () =>
 
 export const disableTunnel = () =>
   fetchApi<{ success: boolean }>("/api/tunnel/disable", { method: "POST" });
+
+export const setPublicUrlEnabled = (enabled: boolean) =>
+  fetchApi<{ success: boolean; enabled: boolean }>("/api/tunnel/public-url", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+
+export const regenerateShortId = () =>
+  fetchApi<{ success: boolean; shortId: string }>("/api/tunnel/regenerate-short-id", {
+    method: "POST",
+  });
 
 // ── AI Chat sessions ─────────────────────────────────────────────
 

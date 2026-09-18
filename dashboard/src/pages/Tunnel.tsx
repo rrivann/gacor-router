@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, Globe, Loader2, Power, RefreshCw } from "lucide-react";
+import { Check, Copy, Globe, Loader2, Power, RefreshCw, RotateCw } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -9,6 +9,8 @@ import {
   disableTunnel,
   enableTunnel,
   fetchTunnelStatus,
+  regenerateShortId,
+  setPublicUrlEnabled,
   type TunnelStatus,
 } from "../lib/api";
 import { cn, copyToClipboard } from "../lib/utils";
@@ -20,7 +22,11 @@ export default function Tunnel() {
   const [status, setStatus] = useState<TunnelStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  // Track which URL was last copied so the check icon renders on the right
+  // row. "direct" and "public" refer to the two URL slots below.
+  const [copied, setCopied] = useState<null | "direct" | "public">(null);
+  const [togglingPublicUrl, setTogglingPublicUrl] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -79,11 +85,42 @@ export default function Tunnel() {
     }
   }
 
-  async function handleCopy() {
-    if (!status?.url) return;
-    if (!(await copyToClipboard(status.url))) return;
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  async function handleCopy(which: "direct" | "public") {
+    const text = which === "direct" ? status?.url : status?.publicUrl;
+    if (!text) return;
+    if (!(await copyToClipboard(text))) return;
+    setCopied(which);
+    setTimeout(() => setCopied((cur) => (cur === which ? null : cur)), 1500);
+  }
+
+  async function handleTogglePublicUrl(enabled: boolean) {
+    setTogglingPublicUrl(true);
+    try {
+      await setPublicUrlEnabled(enabled);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTogglingPublicUrl(false);
+      await load();
+    }
+  }
+
+  async function handleRegenerateShortId() {
+    if (!confirm("Generate a new stable URL? The current one will stop working immediately.")) return;
+    setRegenerating(true);
+    try {
+      await regenerateShortId();
+      // Re-enable so the new id gets registered with the worker. Otherwise
+      // the stable URL would 502 until the next spawn.
+      if (status?.enabled) {
+        await enableTunnel();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRegenerating(false);
+      await load();
+    }
   }
 
   // Backend now guarantees `enabled` is only true when the process is
@@ -146,13 +183,39 @@ export default function Tunnel() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* URL display */}
+          {/* Stable public URL (abc-tunnel.us) — persistent across restarts.
+              Recommended for clients that hardcode the URL. */}
+          {status?.publicUrl && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  Stable URL
+                  <Badge variant="success">recommended</Badge>
+                </span>
+                <span>persistent across restarts</span>
+              </div>
+              <div className="flex items-center gap-2 rounded-md border border-success/30 bg-success/5 px-3 py-2.5">
+                <code className="flex-1 truncate text-sm text-success">{status.publicUrl}</code>
+                <Button variant="ghost" size="icon" onClick={() => handleCopy("public")} aria-label="Copy stable URL">
+                  {copied === "public" ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Direct trycloudflare.com URL — rotates on every enable. */}
           {status?.url && (
-            <div className="flex items-center gap-2 rounded-md border border-success/30 bg-success/5 px-3 py-2.5">
-              <code className="flex-1 truncate text-sm text-success">{status.url}</code>
-              <Button variant="ghost" size="icon" onClick={handleCopy} aria-label="Copy URL">
-                {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
-              </Button>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Direct URL</span>
+                <span>changes on every enable</span>
+              </div>
+              <div className="flex items-center gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2.5">
+                <code className="flex-1 truncate text-sm text-secondary-foreground">{status.url}</code>
+                <Button variant="ghost" size="icon" onClick={() => handleCopy("direct")} aria-label="Copy direct URL">
+                  {copied === "direct" ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
             </div>
           )}
 
@@ -206,8 +269,52 @@ export default function Tunnel() {
             <code className="rounded bg-secondary px-1 py-0.5">
               {status?.url ? `${status.url}/v1` : "https://<url>/v1"}
             </code>{" "}
-            as their OpenAI-compatible base URL. Quick tunnel URLs are random and change on every enable.
+            as their OpenAI-compatible base URL.
           </p>
+
+          {/* Stable URL feature toggle + regenerate — bottom of the card so it
+              stays out of the way but remains reachable. */}
+          <div className="space-y-3 rounded-md border border-border bg-secondary/30 p-3">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={status?.publicUrlEnabled ?? true}
+                onChange={(e) => handleTogglePublicUrl(e.target.checked)}
+                disabled={togglingPublicUrl}
+                className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border accent-primary"
+              />
+              <div className="flex-1 text-xs">
+                <div className="font-medium text-foreground">Use abc-tunnel.us for stable URL</div>
+                <p className="mt-0.5 text-muted-foreground">
+                  Registers this router with a third-party worker so{" "}
+                  <code className="rounded bg-secondary px-1">r&lt;id&gt;.abc-tunnel.us</code> stays
+                  valid across restarts. Traffic proxies through the worker — disable for a
+                  direct-only path.
+                </p>
+              </div>
+            </label>
+            {status?.publicUrlEnabled && status?.shortId && (
+              <div className="flex items-center justify-between border-t border-border pt-2 text-xs">
+                <span className="text-muted-foreground">
+                  shortId: <code className="rounded bg-secondary px-1">{status.shortId}</code>
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleRegenerateShortId}
+                  disabled={regenerating || working}
+                  className="h-7 text-xs"
+                >
+                  {regenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-3.5 w-3.5" />
+                  )}
+                  Regenerate
+                </Button>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -29,7 +29,13 @@ import {
   type UsageRange,
 } from "../db/logs";
 import { errorResponse } from "../lib/http";
-import { disableTunnel, enableTunnel, getTunnelStatus } from "../tunnel/manager";
+import {
+  disableTunnel,
+  enableTunnel,
+  getTunnelStatus,
+  regenerateShortId,
+  setPublicUrlEnabled,
+} from "../tunnel/manager";
 import { fetchAndCacheUsage, UsageError } from "../lib/usage";
 import { warmAccount, warmAll } from "../lib/warmup";
 import { getAutoWarmConfig, setAutoWarmConfig } from "../lib/autowarm";
@@ -369,6 +375,25 @@ manage.post("/tunnel/enable", async (c) => {
 });
 
 manage.post("/tunnel/disable", (c) => c.json(disableTunnel()));
+
+// Toggle the abc-tunnel.us stable URL feature on/off. Doesn't restart the
+// tunnel — the next status read reflects it (publicUrl null when off).
+manage.put("/tunnel/public-url", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { enabled?: unknown } | null;
+  if (!body || typeof body.enabled !== "boolean") {
+    return errorResponse(400, "invalid_request_error", "`enabled` must be a boolean", "enabled");
+  }
+  setPublicUrlEnabled(body.enabled);
+  return c.json({ success: true, enabled: body.enabled });
+});
+
+// Explicit reset: mint a fresh shortId. Existing stable URL becomes invalid;
+// the next enable registers the new one. Use this if the current shortId
+// might have been hijacked on the unauthenticated worker.
+manage.post("/tunnel/regenerate-short-id", (c) => {
+  const shortId = regenerateShortId();
+  return c.json({ success: true, shortId });
+});
 
 // ── Account usage (credit snapshots) ─────────────────────────────
 
