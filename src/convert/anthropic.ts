@@ -355,7 +355,10 @@ export async function* toAnthropicEvents(
     for await (const ev of events) {
       const out: AnthropicEvent[] = [];
       if (!started) out.push(...start(ev.model));
-      if (ev.model) seenModel = ev.model;
+      // Deliberately DO NOT overwrite seenModel from upstream events —
+    // Anthropic clients validate the response.model against their request
+    // and their hardcoded whitelist. The caller passes the client-sent id
+    // (e.g. "claude-opus-4-7[1m]") and we must echo that back unchanged.
 
       if (ev.reasoning) {
         if (open?.kind !== "thinking") {
@@ -508,7 +511,10 @@ export async function toAnthropicMessage(
   for await (const ev of events) {
     if (ev.text) text += ev.text;
     if (ev.reasoning) reasoning += ev.reasoning;
-    if (ev.model) seenModel = ev.model;
+    // Deliberately DO NOT overwrite seenModel from upstream events —
+    // Anthropic clients validate the response.model against their request
+    // and their hardcoded whitelist. The caller passes the client-sent id
+    // (e.g. "claude-opus-4-7[1m]") and we must echo that back unchanged.
     if (ev.finish) finish = ev.finish;
     if (ev.usage) usage = ev.usage;
     for (const tc of ev.toolCalls ?? []) {

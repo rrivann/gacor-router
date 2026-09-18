@@ -44,7 +44,12 @@ api.use("/v1/*", apiKeyAuth);
 interface Resolved {
   provider: Provider;
   providerName: string;
+  // Canonical id the upstream understands, post-alias, post-split.
   model: string;
+  // Exactly what the client sent. remove clients validate the response
+  // model against the request model, so /v1/messages must echo this back
+  // unchanged even after resolveModel unwrapped it into a different name.
+  requestedModel: string;
   body: Record<string, unknown>;
 }
 
@@ -86,7 +91,13 @@ function resolve(raw: unknown): Response | Resolved {
     );
   }
 
-  return { provider, providerName: route.provider, model: route.model, body };
+  return {
+    provider,
+    providerName: route.provider,
+    model: route.model,
+    requestedModel: body.model,
+    body,
+  };
 }
 
 async function readBody(c: { req: { json: () => Promise<unknown> } }): Promise<Response | Resolved> {
@@ -178,7 +189,13 @@ api.post("/v1/messages", async (c) => {
   const req = toCanonicalFromAnthropic(r.body as unknown as AnthropicBody, r.model);
   try {
     const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c), key);
-    return req.stream ? toAnthropicSSE(stream, r.model) : await toAnthropicMessage(stream, r.model);
+    // Echo the client-sent model, not the canonical upstream name — Anthropic
+    // clients (Claude Code) validate the response.model against their
+    // whitelist, so `claude-opus-4.7-1m` (upstream) would fail even though
+    // `claude-opus-4-7[1m]` (what the client actually sent) would pass.
+    return req.stream
+      ? toAnthropicSSE(stream, r.requestedModel)
+      : await toAnthropicMessage(stream, r.requestedModel);
   } catch (e) {
     return upstreamFailure(e);
   }

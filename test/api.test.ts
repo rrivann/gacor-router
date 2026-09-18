@@ -414,6 +414,28 @@ test("/v1/messages streams the Anthropic event sequence", async () => {
   expect(text).toContain("event: message_stop\n");
 });
 
+test("/v1/messages echoes the client-sent model even when upstream reports a different name", async () => {
+  // Rogue upstream frame carrying a `model` different from what the client sent.
+  // Our converter must ignore it and echo the request model verbatim — Anthropic
+  // clients (Claude Code) validate the response.model against their whitelist,
+  // so leaking the upstream's canonical name would fail that check.
+  const rogue = [
+    'data: {"model":"claude-upstream-fake","choices":[{"delta":{"role":"assistant","content":"hi"}}]}',
+    'data: {"choices":[{"delta":{"content":" there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}',
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  stub = () => new Response(rogue, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  const r = await chat(
+    { model: "claude-opus-4-7[1m]", messages: msgs, max_tokens: 64 },
+    "/v1/messages"
+  );
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(body.model).toBe("claude-opus-4-7[1m]");
+});
+
+
 // The Anthropic system field is a sibling of messages, not a message; it has
 // to reach the upstream as the leading system turn.
 test("/v1/messages lifts the system field into the upstream messages", async () => {
