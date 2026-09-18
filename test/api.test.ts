@@ -1603,3 +1603,70 @@ test("console.log fires a console_log event with the [LEVEL] prefixed line", asy
   expect(line.startsWith("[WARN]")).toBe(true);
   off();
 });
+
+test("a successful chat emits 9router-style ▶ POST and 📊 DONE console lines", async () => {
+  // The proxy loop calls console.info on start + on success; both fire
+  // through the ring buffer to console_log WS events (v0.3.9). The
+  // /console-log page consumes these to render the rotation trace.
+  const { initConsoleLogCapture } = await import("../src/lib/consoleLog");
+  initConsoleLogCapture();
+
+  liveDb.exec(`UPDATE accounts SET status='active', usage_json=NULL WHERE id=1`);
+  stub = () => new Response(OK_SSE, { status: 200 });
+
+  const events: { type: string; data: unknown }[] = [];
+  const off = onEvent((e) => events.push(e));
+
+  const r = await chat({ model: "codebuddy/claude-opus-5", messages: msgs });
+  expect(r.status).toBe(200);
+  await r.text();
+
+  const lines = events
+    .filter((e) => e.type === "console_log")
+    .map((e) => (e.data as { line?: string }).line ?? "");
+  expect(lines.some((l) => l.includes("▶ POST") && l.includes("codebuddy/claude-opus-5") && l.includes("ACC:acc-1"))).toBe(true);
+  expect(lines.some((l) => l.includes("📊 DONE") && l.includes("OUT 1"))).toBe(true);
+  off();
+});
+
+test("a rotation through an exhausted account leaves a full ✗ / ⚠️ / ▶ trace", async () => {
+  // First account fires 429 quota → auto-disable + fallback logs.
+  // Then rotation picks the second account (added inline) and succeeds.
+  const { initConsoleLogCapture } = await import("../src/lib/consoleLog");
+  initConsoleLogCapture();
+
+  liveDb.exec(`UPDATE accounts SET status='active', usage_json=NULL WHERE id=1`);
+  liveDb.exec(`INSERT OR IGNORE INTO accounts (id,provider,label,secret,status,created_at)
+               VALUES (99,'codebuddy','acc-99','token-99','active',0)`);
+
+  let call = 0;
+  stub = () => {
+    call += 1;
+    if (call === 1) {
+      return new Response(`{"error":"insufficient_quota"}`, { status: 429 });
+    }
+    return new Response(OK_SSE, { status: 200 });
+  };
+
+  const events: { type: string; data: unknown }[] = [];
+  const off = onEvent((e) => events.push(e));
+
+  const r = await chat({ model: "codebuddy/claude-opus-5", messages: msgs });
+  expect(r.status).toBe(200);
+  await r.text();
+
+  const lines = events
+    .filter((e) => e.type === "console_log")
+    .map((e) => (e.data as { line?: string }).line ?? "");
+  // Trace order: ▶ POST acc-1 → ✗ ERROR 429 → ⚠️ AUTH → ⚠️ FALLBACK → ▶ POST acc-99 → 📊 DONE
+  expect(lines.some((l) => l.includes("▶ POST") && l.includes("ACC:acc-1"))).toBe(true);
+  expect(lines.some((l) => l.includes("✗ ERROR 429"))).toBe(true);
+  expect(lines.some((l) => l.includes("[AUTH]") && l.includes("acc-1") && l.includes("credits exhausted"))).toBe(true);
+  expect(lines.some((l) => l.includes("[FALLBACK]") && l.includes("acc-1") && l.includes("NEXT ACCOUNT"))).toBe(true);
+  expect(lines.some((l) => l.includes("▶ POST") && l.includes("ACC:acc-99"))).toBe(true);
+  expect(lines.some((l) => l.includes("📊 DONE"))).toBe(true);
+
+  off();
+  liveDb.exec(`DELETE FROM accounts WHERE id=99`);
+  liveDb.exec(`UPDATE accounts SET status='active' WHERE id=1`);
+});

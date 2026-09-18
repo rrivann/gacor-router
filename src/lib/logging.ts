@@ -11,6 +11,7 @@ import { getRequestLogRow, insertRequestLog } from "../db/logs";
 import { computeDollarCost } from "./pricing";
 import { addApiKeyUsage, type ApiKeyRow } from "../db/apiKeys";
 import { emit, EV_REQUEST_LOG } from "./events";
+import { logRequestDone } from "./proxyLog";
 
 // Emit the full RequestLogRow (same shape as /api/stats/requests returns)
 // so WS subscribers can render immediately without a follow-up fetch. Reads
@@ -90,6 +91,20 @@ export function loggingTap(ctx: LogContext) {
       // a rich internal field that only the detail drawer consumes; carry
       // it as extras so the row stays lean for the list view.
       emitRequestLogRow(id, { attempts: attempts.map(attemptSummary) });
+      // 9router-style DONE log for the /console-log page. Only fires on
+      // success — errors already logged their own ✗ line inside the proxy
+      // loop with the raw status + body.
+      if (outcome.status === "success") {
+        logRequestDone({
+          providerName: ctx.providerName,
+          model: ctx.model,
+          durationMs: Date.now() - startedAt,
+          ttftMs: outcome.ttftMs ?? null,
+          promptTokens: outcome.promptTokens ?? null,
+          completionTokens: outcome.completionTokens ?? null,
+          cachedTokens: outcome.cachedTokens ?? null,
+        });
+      }
     }
 
     // The request never produced a stream — every account failed, or the

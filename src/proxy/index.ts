@@ -17,6 +17,7 @@ import type {
 } from "../providers/types";
 import { peekError } from "../providers/peek";
 import type { Pool } from "../pool/pool";
+import { logAutoDisable, logFallback, logRequestError, logRequestStart } from "../lib/proxyLog";
 
 export interface Attempt {
   account: Account;
@@ -116,11 +117,23 @@ export async function proxyChat(
       if (!refreshed) {
         attempts.push({ account, status: 0, outcome: "dead", body: "credential refresh failed" });
         pool.react(account.id, "dead");
+        logAutoDisable(account.label, "banned");
+        logFallback(account.label, 0);
         continue;
       }
       if (refreshed.creds !== before) pool.persistCreds(account.id, refreshed.creds);
       account = refreshed;
     }
+
+    logRequestStart({
+      providerName: name,
+      model: req.model,
+      accountLabel: account.label,
+      stream: req.stream === true,
+      messages: req.messages.length,
+      tools: req.tools?.length ?? 0,
+    });
+    const startedAt = Date.now();
 
     const upstream = await provider.buildRequest(req, account);
     const resp = await doFetch(upstream, opts.signal ? { signal: opts.signal } : undefined);
@@ -139,7 +152,18 @@ export async function proxyChat(
       const reclassified = provider.classify(resp.status, body);
       attempts.push({ account, status: resp.status, outcome: reclassified, body });
       pool.react(account.id, reclassified);
-      if (reclassified === "dead" || reclassified === "exhausted") continue;
+      logRequestError({
+        status: resp.status,
+        providerName: name,
+        model: req.model,
+        durationMs: Date.now() - startedAt,
+        body,
+      });
+      if (reclassified === "dead" || reclassified === "exhausted") {
+        logAutoDisable(account.label, reclassified === "dead" ? "banned" : "exhausted");
+        logFallback(account.label, resp.status);
+        continue;
+      }
       return finish(null, null, new UpstreamError(resp.status, body, reclassified, attempts));
     }
 
@@ -147,10 +171,21 @@ export async function proxyChat(
     const outcome = provider.classify(resp.status, body);
     attempts.push({ account, status: resp.status, outcome, body });
     pool.react(account.id, outcome);
+    logRequestError({
+      status: resp.status,
+      providerName: name,
+      model: req.model,
+      durationMs: Date.now() - startedAt,
+      body,
+    });
 
     // classify() says the account is fine, yet the body wasn't a usable
     // stream — a malformed response, not a rotation-worthy failure.
-    if (outcome === "dead" || outcome === "exhausted") continue;
+    if (outcome === "dead" || outcome === "exhausted") {
+      logAutoDisable(account.label, outcome === "dead" ? "banned" : "exhausted");
+      logFallback(account.label, resp.status);
+      continue;
+    }
     return finish(null, null, new UpstreamError(resp.status, body, outcome, attempts));
   }
 
@@ -190,11 +225,23 @@ export async function proxyImage(
       if (!refreshed) {
         attempts.push({ account, status: 0, outcome: "dead", body: "credential refresh failed" });
         pool.react(account.id, "dead");
+        logAutoDisable(account.label, "banned");
+        logFallback(account.label, 0);
         continue;
       }
       if (refreshed.creds !== before) pool.persistCreds(account.id, refreshed.creds);
       account = refreshed;
     }
+
+    logRequestStart({
+      providerName: name,
+      model: req.model,
+      accountLabel: account.label,
+      stream: false,
+      messages: 1,
+      tools: 0,
+    });
+    const startedAt = Date.now();
 
     const { resp, parse } = await provider.image(req, account);
     // Image endpoint returns one JSON body — no stream sniff needed.
@@ -216,7 +263,18 @@ export async function proxyImage(
     const outcome = provider.classify(resp.status, body);
     attempts.push({ account, status: resp.status, outcome, body });
     pool.react(account.id, outcome);
-    if (outcome === "dead" || outcome === "exhausted") continue;
+    logRequestError({
+      status: resp.status,
+      providerName: name,
+      model: req.model,
+      durationMs: Date.now() - startedAt,
+      body,
+    });
+    if (outcome === "dead" || outcome === "exhausted") {
+      logAutoDisable(account.label, outcome === "dead" ? "banned" : "exhausted");
+      logFallback(account.label, resp.status);
+      continue;
+    }
     throw new UpstreamError(resp.status, body, outcome, attempts);
   }
 
@@ -258,11 +316,23 @@ export async function proxyVideo(
       if (!refreshed) {
         attempts.push({ account, status: 0, outcome: "dead", body: "credential refresh failed" });
         pool.react(account.id, "dead");
+        logAutoDisable(account.label, "banned");
+        logFallback(account.label, 0);
         continue;
       }
       if (refreshed.creds !== before) pool.persistCreds(account.id, refreshed.creds);
       account = refreshed;
     }
+
+    logRequestStart({
+      providerName: name,
+      model: req.model,
+      accountLabel: account.label,
+      stream: false,
+      messages: 1,
+      tools: 0,
+    });
+    const startedAt = Date.now();
 
     const { resp, parse } = await provider.video(req, account);
     if (resp.ok) {
@@ -280,7 +350,18 @@ export async function proxyVideo(
     const outcome = provider.classify(resp.status, body);
     attempts.push({ account, status: resp.status, outcome, body });
     pool.react(account.id, outcome);
-    if (outcome === "dead" || outcome === "exhausted") continue;
+    logRequestError({
+      status: resp.status,
+      providerName: name,
+      model: req.model,
+      durationMs: Date.now() - startedAt,
+      body,
+    });
+    if (outcome === "dead" || outcome === "exhausted") {
+      logAutoDisable(account.label, outcome === "dead" ? "banned" : "exhausted");
+      logFallback(account.label, resp.status);
+      continue;
+    }
     throw new UpstreamError(resp.status, body, outcome, attempts);
   }
 
