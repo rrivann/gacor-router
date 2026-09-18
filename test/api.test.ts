@@ -459,6 +459,63 @@ test("/v1/messages stream echoes the client-sent model in message_start", async 
   expect(startPayload.message.model).toBe("claude-opus-4-7[1m]");
 });
 
+test("/v1/messages/count_tokens returns a reasonable input_tokens estimate", async () => {
+  // Claude Code hits this endpoint before /v1/messages to validate the model
+  // exists. A 404 here is misreported as "issue with the selected model".
+  const r = await api.request("/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-opus-4-7[1m]",
+      messages: [{ role: "user", content: "halo bro apa kabar" }],
+    }),
+  });
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  expect(typeof body.input_tokens).toBe("number");
+  expect(body.input_tokens).toBeGreaterThan(0);
+  // 19 chars / 4 ~= 5. Not asserting an exact number since the heuristic
+  // may shift; just guarding the shape and floor.
+  expect(body.input_tokens).toBeLessThan(50);
+});
+
+test("/v1/messages/count_tokens sums system + array content blocks + tool_result", async () => {
+  const r = await api.request("/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-opus-4-7[1m]",
+      system: "You are helpful.",
+      messages: [
+        { role: "user", content: [{ type: "text", text: "hello world" }] },
+        { role: "assistant", content: "hi there" },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "42" }] },
+      ],
+    }),
+  });
+  expect(r.status).toBe(200);
+  const body = await r.json();
+  // Total chars: 16 (system) + 11 (hello world) + 8 (hi there) + 2 (42) = 37 → 10 tokens
+  expect(body.input_tokens).toBe(Math.ceil(37 / 4));
+});
+
+test("/v1/messages/count_tokens rejects malformed bodies", async () => {
+  const noJson = await api.request("/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "not-json",
+  });
+  expect(noJson.status).toBe(400);
+
+  const notObj = await api.request("/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify([1, 2, 3]),
+  });
+  expect(notObj.status).toBe(400);
+});
+
+
 
 
 // The Anthropic system field is a sibling of messages, not a message; it has

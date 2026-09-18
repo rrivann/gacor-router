@@ -201,6 +201,60 @@ api.post("/v1/messages", async (c) => {
   }
 });
 
+// POST /v1/messages/count_tokens — pre-request validation endpoint the
+// Anthropic SDK (and Claude Code) hit before sending a message. We do NOT
+// have upstream token counters, and Claude Code only needs a well-formed
+// { input_tokens: number } back — not an exact figure — to decide the
+// model is reachable and the context fits. A naive `chars / 4` estimate
+// covers that: it's the widely cited English-token heuristic.
+//
+// Skipping this endpoint made Claude Code hit 404, and the Anthropic SDK
+// maps every 404 during model validation to model_not_found — which the
+// client renders as "There's an issue with the selected model".
+api.post("/v1/messages/count_tokens", async (c) => {
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return errorResponse(400, "invalid_request_error", "body must be a JSON object");
+  }
+  const body = raw as Record<string, unknown>;
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const system = body.system;
+
+  let chars = 0;
+  if (typeof system === "string") chars += system.length;
+  else if (Array.isArray(system)) {
+    for (const blk of system) {
+      if (blk && typeof blk === "object" && typeof (blk as { text?: unknown }).text === "string") {
+        chars += ((blk as { text: string }).text).length;
+      }
+    }
+  }
+
+  for (const m of messages) {
+    if (!m || typeof m !== "object") continue;
+    const content = (m as { content?: unknown }).content;
+    if (typeof content === "string") {
+      chars += content.length;
+    } else if (Array.isArray(content)) {
+      for (const blk of content) {
+        if (!blk || typeof blk !== "object") continue;
+        const b = blk as { text?: unknown; content?: unknown };
+        if (typeof b.text === "string") chars += b.text.length;
+        if (typeof b.content === "string") chars += b.content.length;
+      }
+    }
+  }
+
+  const input_tokens = Math.max(1, Math.ceil(chars / 4));
+  return c.json({ input_tokens });
+});
+
+
 // Image generation, 0penAI-compatible. The body is validated inline (only
 // `model` and `prompt` are required); the provider does the real work.
 api.post("/v1/images/generations", async (c) => {
