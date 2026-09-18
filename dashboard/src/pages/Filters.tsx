@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import { ArrowRight, Filter as FilterIcon, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowRight, Download, Filter as FilterIcon, Loader2, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
+import { Dialog } from "../components/ui/dialog";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Alert } from "../components/ui/Alert";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../lib/api";
 import { cn } from "../lib/utils";
 import { useTimedMessage } from "../hooks/useTimedMessage";
+import { normalizeFilterBundle } from "../lib/filterImport";
 
 // Filters page — pattern → replacement rules applied to outbound message text
 // before it reaches the provider. enowx-inspired: dense list, toggle + delete
@@ -31,6 +33,17 @@ export default function Filters() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { message, setMessage, clearMessage } = useTimedMessage<string | null>(null);
+  // Import UI state — a null importOpen means the summary dialog is closed.
+  const [importOpen, setImportOpen] = useState<null | {
+    added: number;
+    skipped: number;
+    failed: number;
+    errors: string[];
+  }>(null);
+  const [importing, setImporting] = useState(false);
+  // Hidden <input> we click programmatically so the Import button can share
+  // the same visual weight as the other header actions.
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     try {
@@ -135,6 +148,82 @@ export default function Filters() {
     }
   }
 
+  function handleDownload() {
+    if (!rows?.length) return;
+    // Native schema — strip DB-only fields (id, createdAt). Keeps the bundle
+    // portable between machines and re-importable without conflict.
+    const bundle = {
+      filters: rows.map(({ pattern, replacement, isRegex, isActive, sort, providerScope }) => ({
+        pattern,
+        replacement,
+        isRegex,
+        isActive,
+        sort,
+        providerScope,
+      })),
+      exportedAt: new Date().toISOString(),
+      exportedFrom: "gacor-router",
+      schemaVersion: 1,
+    };
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `gacor-filters-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleUploadClick() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Reset the input so re-selecting the same file re-fires onchange.
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        fail("Invalid JSON — check the file contents");
+        return;
+      }
+      const candidates = normalizeFilterBundle(parsed);
+      if (candidates.length === 0) {
+        fail("No importable rules found — file may be empty or in an unknown format");
+        return;
+      }
+      // Skip patterns we already have. Backend has no unique constraint so
+      // dedup is our responsibility.
+      const existing = new Set((rows ?? []).map((r) => r.pattern));
+      let added = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+      for (const r of candidates) {
+        if (existing.has(r.pattern)) {
+          skipped++;
+          continue;
+        }
+        try {
+          await createFilter(r);
+          existing.add(r.pattern);
+          added++;
+        } catch (err) {
+          errors.push(`${r.pattern}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      await load();
+      setImportOpen({ added, skipped, failed: errors.length, errors });
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -142,9 +231,36 @@ export default function Filters() {
         title="Filters"
         subtitle="Rewrite outbound message text before it reaches the provider"
         actions={
-          <Button variant="outline" size="sm" onClick={load}>
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownload}
+              disabled={!rows?.length}
+              title={rows?.length ? "Export all rules to JSON" : "No rules to export"}
+            >
+              <Download className="h-4 w-4" /> Export
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleUploadClick}
+              disabled={importing}
+            >
+              {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              Import
+            </Button>
+            <Button variant="outline" size="sm" onClick={load}>
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleFileSelected}
+            />
+          </>
         }
       />
 
@@ -331,6 +447,36 @@ export default function Filters() {
           </div>
         )}
       </Card>
+
+      <Dialog
+        open={importOpen !== null}
+        onClose={() => setImportOpen(null)}
+        title="Import summary"
+      >
+        <div className="space-y-3">
+          <Alert variant={importOpen?.failed ? "warning" : "success"}>
+            Added <span className="font-semibold tabular-nums">{importOpen?.added ?? 0}</span> rule
+            {importOpen?.added === 1 ? "" : "s"} · skipped{" "}
+            <span className="font-semibold tabular-nums">{importOpen?.skipped ?? 0}</span> (duplicate
+            pattern) · failed{" "}
+            <span className="font-semibold tabular-nums">{importOpen?.failed ?? 0}</span>
+          </Alert>
+          {importOpen?.errors && importOpen.errors.length > 0 && (
+            <div className="max-h-40 space-y-1 overflow-auto rounded border border-border bg-secondary/40 p-2 text-xs">
+              {importOpen.errors.map((e, i) => (
+                <div key={i} className="text-error">
+                  {e}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setImportOpen(null)}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }
