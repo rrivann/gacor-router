@@ -104,9 +104,16 @@ export function logRequestDone(opts: {
   const total = opts.cachedTokens ?? 0;
   const w = opts.cacheWriteTokens ?? 0;
   const r = total - w;
+  // IN = fresh tokens only, matching 9router. Our upstream parser folds
+  // cache into promptTokens (see src/providers/oaistream.ts:88), so we
+  // subtract cache back out here to reach the fresh-input figure —
+  // otherwise a 97314-token turn with 45354 cache reads under 300 fresh
+  // tokens of user prompt still reads as "IN 97314", which is misleading.
+  const promptTotal = opts.promptTokens ?? 0;
+  const fresh = Math.max(0, promptTotal - total);
   const cache = total ? ` (CACHE ↻${total} W:${w} R:${r})` : "";
   console.info(
-    `${ts()} 🟤 📊 DONE ${fmtDuration(opts.durationMs)}${ttft} · IN ${opts.promptTokens ?? 0}${cache} · OUT ${opts.completionTokens ?? 0}`
+    `${ts()} 🟤 📊 DONE ${fmtDuration(opts.durationMs)}${ttft} · IN ${fresh}${cache} · OUT ${opts.completionTokens ?? 0}`
   );
 }
 
