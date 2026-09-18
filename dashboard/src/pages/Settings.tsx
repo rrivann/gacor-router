@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { KeyRound, Loader2, Plus, RefreshCw, Settings as SettingsIcon, Trash2 } from "lucide-react";
+import { KeyRound, Loader2, Plus, RefreshCw, Settings as SettingsIcon, Trash2, Zap } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Toggle } from "../components/ui/toggle";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Alert } from "../components/ui/Alert";
 import { changePassword, deleteSetting, fetchSettings, saveSettings } from "../lib/api";
@@ -112,6 +113,40 @@ export default function Settings() {
             onSave={handleSave}
             onDelete={handleDelete}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-amber-400" /> Token Saver (RTK)
+          </CardTitle>
+          <CardDescription>
+            Compresses tool output (git diff, grep, ls, build logs) before it reaches the upstream —
+            typical savings 5-15% on agentic conversations. Toggle off to send tool results raw. Per-request
+            bypass: <code className="rounded bg-secondary px-1 py-0.5 text-xs">X-Token-Saver: off</code> header.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4">
+            <div className="text-sm">
+              <div className="font-medium">
+                {settings.rtk_enabled === "false" ? "Disabled" : "Enabled"}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Live savings show up in{" "}
+                <a href="/console-log" className="underline hover:text-foreground">
+                  Console
+                </a>{" "}
+                as <code className="rounded bg-secondary px-1 py-0.5 text-[10px]">[RTK] saved …B / …B</code>.
+              </div>
+            </div>
+            <Toggle
+              checked={settings.rtk_enabled !== "false"}
+              onChange={(next) => handleSave("rtk_enabled", next ? "true" : "false")}
+              label="Token Saver"
+            />
+          </div>
         </CardContent>
       </Card>
 
