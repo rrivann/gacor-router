@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { KeyRound, Loader2, Plus, RefreshCw, Settings as SettingsIcon, Trash2, Zap } from "lucide-react";
+import { KeyRound, Loader2, Plus, RefreshCw, Settings as SettingsIcon, Tag, Trash2, Zap } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -145,6 +145,42 @@ export default function Settings() {
               checked={settings.rtk_enabled !== "false"}
               onChange={(next) => handleSave("rtk_enabled", next ? "true" : "false")}
               label="Token Saver"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Tag className="h-4 w-4 text-amber-400" /> CL4ude Header Overlay
+          </CardTitle>
+          <CardDescription>
+            Snapshots identity headers from CL4ude Code CLI clients (UA, remove-beta, x-stainless-*) and
+            forwards them onto the outbound CodeBuddy request. <strong>Risk</strong>: identity mismatch
+            between the injected CL4ude fingerprint and CodeBuddy-specific headers (X-Ide-Type, X-Product,
+            x-codebuddy-request) could trigger anti-fraud detection on CodeBuddy accounts. Enable at your
+            own risk; disable immediately if you see auth failures or bans.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4">
+            <div className="text-sm">
+              <div className="font-medium">
+                {settings.claude_header_overlay === "true" ? "Enabled" : "Disabled (default)"}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Detection logs show up in{" "}
+                <a href="/console-log" className="underline hover:text-foreground">
+                  Console
+                </a>{" "}
+                as <code className="rounded bg-secondary px-1 py-0.5 text-[10px]">[CL4udeHeaders] cached N hdrs</code>.
+              </div>
+            </div>
+            <Toggle
+              checked={settings.claude_header_overlay === "true"}
+              onChange={(next) => handleSave("claude_header_overlay", next ? "true" : "false")}
+              label="CL4ude Header Overlay"
             />
           </div>
         </CardContent>

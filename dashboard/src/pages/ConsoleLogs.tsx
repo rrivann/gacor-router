@@ -36,6 +36,9 @@ function colorLine(line: string): string {
   // RTK savings — amber to nod at "efficiency" alongside the tunnel blue
   // family. Also mirrors 9router's log colour for the same tag.
   if (line.includes("[RTK]")) return "text-amber-300";
+  // CL4ude Code identity capture — same amber family as RTK but brighter,
+  // so a rare event pops when it happens alongside the constant RTK stream.
+  if (line.includes("[CL4udeHeaders]")) return "text-amber-400";
   // Tunnel state machine + shortId + register.
   if (line.includes("[tunnel]")) return "text-sky-300";
   // Generic content-filter line (still comes through as plain LOG level).

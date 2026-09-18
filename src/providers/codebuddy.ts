@@ -22,6 +22,8 @@ import type {
 } from "./types";
 import { parseResponse } from "./oaistream";
 import { codebuddyModels } from "./codebuddy.models";
+import { applyCL4udeOverlayToHeaders } from "../lib/claudeHeaderCache";
+import { getSetting } from "../db/accounts";
 
 const CLIENT_VERSION = "2.108.1";
 const USER_AGENT = `CLI/${CLIENT_VERSION} CodeBuddy/${CLIENT_VERSION}`;
@@ -146,12 +148,23 @@ function wireMessages(req: ChatRequest): WireMessage[] {
   return out;
 }
 
+// Guarded overlay call. The pure logic (union of remove-beta, replace of
+// everything else) lives in src/lib/claudeHeaderCache; here we only decide
+// whether to fire it. Guarded twice — the capture site in the API layer
+// only writes the cache when the setting is on, and this second check means
+// toggling OFF stops forwarding on the very next request even if a stale
+// cache is still populated from an earlier session.
+function applyCL4udeOverlay(headers: Headers): void {
+  if (getSetting("claude_header_overlay") !== "true") return;
+  applyCL4udeOverlayToHeaders(headers);
+}
+
 // Per-request CLI identifiers. The upstream correlates these; reusing one
 // across requests is what a real client never does.
 function buildHeaders(token: string): Headers {
   const conversationId = randomUUID();
   const requestId = randomUUID().replace(/-/g, "");
-  return new Headers({
+  const headers = new Headers({
     Accept: "text/event-stream",
     "Content-Type": "application/json; charset=utf-8",
     "Content-Encoding": "gzip",
@@ -176,6 +189,8 @@ function buildHeaders(token: string): Headers {
     "X-Domain": "www.codebuddy.ai",
     Authorization: `Bearer ${token}`,
   });
+  applyCL4udeOverlay(headers);
+  return headers;
 }
 
 // Prefer the CLI-plugin access_token; older accounts were stored as api_key,

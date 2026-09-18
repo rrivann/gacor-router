@@ -94,9 +94,17 @@ export function logRequestDone(opts: {
   promptTokens: number | null;
   completionTokens: number | null;
   cachedTokens: number | null;
+  cacheWriteTokens: number | null;
 }): void {
   const ttft = opts.ttftMs != null ? ` · TTFT ${opts.ttftMs}ms` : "";
-  const cache = opts.cachedTokens ? ` (CACHE ↻${opts.cachedTokens})` : "";
+  // Cache line combines 9router's single-number shape (total tokens the
+  // upstream saw as cache) with our own W/R breakdown — same-cost cache
+  // reads and expensive cache writes have very different bills, and
+  // scanning the log for "am I actually hitting cache" needs both numbers.
+  const total = opts.cachedTokens ?? 0;
+  const w = opts.cacheWriteTokens ?? 0;
+  const r = total - w;
+  const cache = total ? ` (CACHE ↻${total} W:${w} R:${r})` : "";
   console.info(
     `${ts()} 🟤 📊 DONE ${fmtDuration(opts.durationMs)}${ttft} · IN ${opts.promptTokens ?? 0}${cache} · OUT ${opts.completionTokens ?? 0}`
   );
@@ -111,4 +119,14 @@ export function logFallback(fromLabel: string, status: number): void {
   console.warn(
     `${ts()} ⚠️  [FALLBACK] ⇄ ACC:${fromLabel} UNAVAILABLE (${status}) → NEXT ACCOUNT`
   );
+}
+
+// Announces every time a real CL4ude Code CLI hits the router — its identity
+// headers were just snapshotted and will be forwarded to CodeBuddy on the
+// next outbound request. Guarded by the claude_header_overlay setting; if
+// the feature is off, the caller never invokes this, so the line stays
+// absent from /console-log.
+export function logCL4udeHeadersCached(count: number, userAgent: string): void {
+  const uaShort = userAgent.length > 40 ? userAgent.slice(0, 40) + "…" : userAgent;
+  console.info(`${ts()} 🟤 🏷️  [CL4udeHeaders] cached ${count} hdrs (UA:${uaShort})`);
 }

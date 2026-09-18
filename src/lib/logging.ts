@@ -112,6 +112,7 @@ export function loggingTap(ctx: LogContext) {
           promptTokens: outcome.promptTokens ?? null,
           completionTokens: outcome.completionTokens ?? null,
           cachedTokens: outcome.cachedTokens ?? null,
+          cacheWriteTokens: outcome.cacheWriteTokens ?? null,
         });
       }
     }

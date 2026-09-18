@@ -23,6 +23,7 @@ import { errorResponse } from "../lib/http";
 import { loggingTap } from "../lib/logging";
 import { compressMessages, formatRtkLog } from "../rtk";
 import { applyFilters } from "../lib/filters";
+import { cacheCL4udeHeaders } from "../lib/claudeHeaderCache";
 import { getAccount, getSetting } from "../db/accounts";
 import { apiKeyAuth, enforceKeyScope } from "../lib/apiKeyAuth";
 import { insertRequestLog } from "../db/logs";
@@ -249,7 +250,18 @@ function run(
   });
 }
 
+// Snapshot identity headers off any real CL4ude Code CLI request that
+// arrives, so the CodeBuddy provider can overlay them onto the outbound
+// request. Off by default — the overlay changes the request fingerprint the
+// upstream sees, so opt in from /settings only after weighing the ban risk.
+function maybeCaptureCL4udeHeaders(c: { req: { raw: Request } }): void {
+  if (getSetting("claude_header_overlay") === "true") {
+    cacheCL4udeHeaders(c.req.raw.headers);
+  }
+}
+
 api.post("/v1/chat/completions", async (c) => {
+  maybeCaptureCL4udeHeaders(c);
   const r = await readBody(c);
   if (r instanceof Response) return r;
 
@@ -269,6 +281,7 @@ api.post("/v1/chat/completions", async (c) => {
 // Anthropic clients get the same pool, proxy, and logging — only the request
 // conversion and the response rendering differ.
 api.post("/v1/messages", async (c) => {
+  maybeCaptureCL4udeHeaders(c);
   const r = await readBody(c);
   if (r instanceof Response) return r;
 
