@@ -28,6 +28,7 @@ export interface RequestLogInsert {
   cachedTokens?: number | null;
   cacheWriteTokens?: number | null;
   reasoningTokens?: number | null;
+  reasoningEstimated?: boolean | null;
   ttftMs?: number | null;
   creditUsed?: number | null;
   dollarCost?: number | null;
@@ -57,6 +58,7 @@ export interface RequestLogRow {
   cachedTokens: number | null;
   cacheWriteTokens: number | null;
   reasoningTokens: number | null;
+  reasoningEstimated: boolean | null;
   ttftMs: number | null;
   creditUsed: number | null;
   dollarCost: number | null;
@@ -83,6 +85,7 @@ const LIST_COLUMNS = {
   cachedTokens: requestLogs.cachedTokens,
   cacheWriteTokens: requestLogs.cacheWriteTokens,
   reasoningTokens: requestLogs.reasoningTokens,
+  reasoningEstimated: requestLogs.reasoningEstimated,
   ttftMs: requestLogs.ttftMs,
   creditUsed: requestLogs.creditUsed,
   dollarCost: requestLogs.dollarCost,

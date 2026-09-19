@@ -19,6 +19,7 @@ export { schema };
 export function ensureSchema(): void {
   const migrations: { table: string; column: string; type: string }[] = [
     { table: "request_logs", column: "filters_applied", type: "TEXT" },
+    { table: "request_logs", column: "reasoning_estimated", type: "INTEGER" },
   ];
   for (const m of migrations) {
     const cols = new Set(

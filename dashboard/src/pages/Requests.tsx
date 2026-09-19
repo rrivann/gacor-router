@@ -281,7 +281,11 @@ export default function Requests() {
                 },
                 { label: "Cache Write", value: selected.cacheWriteTokens },
                 { label: "Out", value: selected.completionTokens },
-                { label: "Reasoning", value: selected.reasoningTokens },
+                {
+                  label: selected.reasoningEstimated ? "Reasoning (est)" : "Reasoning",
+                  value: selected.reasoningTokens,
+                  approximate: !!selected.reasoningEstimated,
+                },
                 { label: "TTFT", value: selected.ttftMs, unit: "ms" as const },
                 { label: "Latency", value: selected.durationMs, unit: "ms" as const },
                 { label: "Credit", value: selected.creditUsed, credit: true },
@@ -296,7 +300,7 @@ export default function Requests() {
                           ? `$${Number(s.value).toFixed(4)}`
                           : s.unit === "ms"
                             ? formatDuration(s.value as number)
-                            : s.value.toLocaleString()
+                            : `${s.approximate ? "~" : ""}${s.value.toLocaleString()}`
                       : "—"}
                   </div>
                   <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</div>

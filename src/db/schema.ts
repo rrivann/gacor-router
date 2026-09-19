@@ -142,6 +142,11 @@ export const requestLogs = sqliteTable(
     // Reasoning-model output split (a subset of completion_tokens). Null when
     // upstream doesn't split (non-reasoning models, models that inline it).
     reasoningTokens: integer("reasoning_tokens"),
+    // True when reasoning_tokens is a client-side estimate from streamed
+    // reasoning_content (upstream returned null but the model streamed thinking
+    // deltas). Null on non-reasoning rows and on rows where upstream reported
+    // a real count. Dashboard renders "~N (est)" instead of "N" when true.
+    reasoningEstimated: integer("reasoning_estimated", { mode: "boolean" }),
     // Time-to-first-token: wall-clock ms from proxy pick → first non-empty
     // content delta. A responsiveness signal separate from total durationMs.
     ttftMs: integer("ttft_ms"),

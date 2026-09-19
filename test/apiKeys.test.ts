@@ -51,7 +51,8 @@ new Database(dbPath).exec(`
     error_message text,
     request_body text,
     response_body text,
-    filters_applied text
+    filters_applied text,
+    reasoning_estimated integer
   );
   CREATE TABLE content_filters (
     id integer primary key autoincrement,

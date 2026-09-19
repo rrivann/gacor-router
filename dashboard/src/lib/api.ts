@@ -88,6 +88,7 @@ export interface RequestLogRow {
   cachedTokens: number | null;
   cacheWriteTokens: number | null;
   reasoningTokens: number | null;
+  reasoningEstimated: boolean | null;
   ttftMs: number | null;
   creditUsed: number | null;
   dollarCost: number | null;

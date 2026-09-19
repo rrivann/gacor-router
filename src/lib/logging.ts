@@ -28,9 +28,20 @@ export function emitRequestLogRow(id: number, extras?: Record<string, unknown>):
 }
 
 // Bodies are stored for the detail drawer, but a runaway upstream shouldn't
-// be able to grow the DB without bound.
-const BODY_CAP = 64 * 1024;
+// be able to grow the DB without bound. 256KB fits typical Code Assistant CLI
+// requests (system prompt + tool schemas + long user messages routinely hit
+// 150-220KB); the previous 64KB cap truncated the thinking config out of
+// audits — see the row #235 investigation.
+const BODY_CAP = 256 * 1024;
 const RESPONSE_CAP = 256 * 1024;
+
+// Heuristic tokenization for reasoning-content when the upstream doesn't
+// return a reasoning_tokens count (CodeBuddy folds it silently into
+// completion_tokens, so the field never arrives). ~4 chars/token matches
+// remove and GPT tokenizer averages for English + code; MIN_CHARS gates out
+// noise like a single-char reasoning delta or trailing whitespace.
+const REASONING_EST_CHARS_PER_TOKEN = 4;
+const REASONING_EST_MIN_CHARS = 20;
 
 function cap(text: string, limit: number): string {
   return text.length <= limit ? text : text.slice(0, limit) + `…[truncated ${text.length - limit} chars]`;
@@ -66,6 +77,7 @@ export function loggingTap(ctx: LogContext) {
       cachedTokens?: number | null;
       cacheWriteTokens?: number | null;
       reasoningTokens?: number | null;
+      reasoningEstimated?: boolean | null;
       ttftMs?: number | null;
       creditUsed?: number | null;
       dollarCost?: number | null;
@@ -147,6 +159,7 @@ async function* persistOnDone(
     cachedTokens?: number | null;
     cacheWriteTokens?: number | null;
     reasoningTokens?: number | null;
+    reasoningEstimated?: boolean | null;
     ttftMs?: number | null;
     creditUsed?: number | null;
     dollarCost?: number | null;
@@ -200,6 +213,17 @@ async function* persistOnDone(
       }
       yield ev;
     }
+    // CodeBuddy never reports reasoning_tokens (verified 0 across 128
+    // successes, 30 models), even when the model streamed reasoning_content.
+    // Estimate from the accumulated stream so /requests shows something
+    // instead of "—". Only kicks in when the upstream count was NULL AND
+    // meaningful reasoning content flowed — a plain non-thinking turn keeps
+    // the field NULL, not `~0 (est)`.
+    let reasoningEstimated: boolean | null = null;
+    if (reasoningTokens === null && reasoning.length >= REASONING_EST_MIN_CHARS) {
+      reasoningTokens = Math.round(reasoning.length / REASONING_EST_CHARS_PER_TOKEN);
+      reasoningEstimated = true;
+    }
     const dollarCost = promptTokens != null && completionTokens != null
       ? computeDollarCost(ctxModel, {
           inputTokens: promptTokens,
@@ -216,6 +240,7 @@ async function* persistOnDone(
       cachedTokens,
       cacheWriteTokens,
       reasoningTokens,
+      reasoningEstimated,
       ttftMs,
       creditUsed,
       dollarCost,
