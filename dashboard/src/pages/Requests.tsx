@@ -188,11 +188,24 @@ export default function Requests() {
                     className="px-4 py-2.5 text-right tabular-nums text-muted-foreground"
                     title={
                       l.cachedTokens != null && l.cachedTokens > 0
-                        ? `Read ${(l.cachedTokens - (l.cacheWriteTokens ?? 0)).toLocaleString()} · Write ${(l.cacheWriteTokens ?? 0).toLocaleString()}`
+                        ? `Read ${(l.cachedTokens - (l.cacheWriteTokens ?? 0)).toLocaleString()} · Write ${l.cacheWriteTokens != null ? l.cacheWriteTokens.toLocaleString() : "—"}`
                         : undefined
                     }
                   >
-                    {l.cachedTokens != null && l.cachedTokens > 0 ? formatTokens(l.cachedTokens) : "—"}
+                    {l.cachedTokens != null && l.cachedTokens > 0 ? (
+                      <span className="inline-flex items-baseline gap-1.5">
+                        <span>{formatTokens(l.cachedTokens)}</span>
+                        {l.promptTokens != null && l.promptTokens > 0 && (
+                          <span className="text-[10px] tabular-nums text-muted-foreground/70">
+                            {Math.round(
+                              ((l.cachedTokens - (l.cacheWriteTokens ?? 0)) / l.promptTokens) * 100
+                            )}%
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-secondary-foreground">
                     {l.completionTokens != null ? formatTokens(l.completionTokens) : "—"}
@@ -273,7 +286,12 @@ export default function Requests() {
               {[
                 { label: "In", value: selected.promptTokens },
                 {
-                  label: "Cache Read",
+                  label:
+                    selected.cachedTokens != null &&
+                    selected.promptTokens != null &&
+                    selected.promptTokens > 0
+                      ? `Cache Read (${Math.round(((selected.cachedTokens - (selected.cacheWriteTokens ?? 0)) / selected.promptTokens) * 100)}% hit)`
+                      : "Cache Read",
                   value:
                     selected.cachedTokens != null
                       ? selected.cachedTokens - (selected.cacheWriteTokens ?? 0)

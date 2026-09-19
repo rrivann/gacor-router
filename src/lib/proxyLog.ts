@@ -101,9 +101,17 @@ export function logRequestDone(opts: {
   // upstream saw as cache) with our own W/R breakdown — same-cost cache
   // reads and expensive cache writes have very different bills, and
   // scanning the log for "am I actually hitting cache" needs both numbers.
+  //
+  // W is "—" (dash) rather than "0" when the upstream never reported a
+  // cache_creation field — glm-5.2 uses implicit cache (creation cost is
+  // absorbed silently, no line item), and rendering "W:0" there implies
+  // "0 tokens written" when the truth is "field not applicable". claude
+  // upstream explicitly reports 0 vs N, so that case still reads "W:0".
   const total = opts.cachedTokens ?? 0;
-  const w = opts.cacheWriteTokens ?? 0;
+  const wRaw = opts.cacheWriteTokens;
+  const w = wRaw ?? 0;
   const r = total - w;
+  const wDisplay = wRaw == null ? "—" : String(w);
   // IN = fresh tokens only, matching 9router. Our upstream parser folds
   // cache into promptTokens (see src/providers/oaistream.ts:88), so we
   // subtract cache back out here to reach the fresh-input figure —
@@ -111,7 +119,7 @@ export function logRequestDone(opts: {
   // tokens of user prompt still reads as "IN 97314", which is misleading.
   const promptTotal = opts.promptTokens ?? 0;
   const fresh = Math.max(0, promptTotal - total);
-  const cache = total ? ` (CACHE ↻${total} W:${w} R:${r})` : "";
+  const cache = total ? ` (CACHE ↻${total} W:${wDisplay} R:${r})` : "";
   console.info(
     `${ts()} 🟤 📊 DONE ${fmtDuration(opts.durationMs)}${ttft} · IN ${fresh}${cache} · OUT ${opts.completionTokens ?? 0}`
   );
