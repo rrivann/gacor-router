@@ -25,12 +25,13 @@ import { compressMessages, formatRtkLog } from "../rtk";
 import { applyFilters } from "../lib/filters";
 import { cacheCL4udeHeaders } from "../lib/claudeHeaderCache";
 import { getAccount, getSetting } from "../db/accounts";
+import { getComboByName } from "../db/combos";
 import { apiKeyAuth, enforceKeyScope } from "../lib/apiKeyAuth";
 import { insertRequestLog } from "../db/logs";
 import { createVideoJob, getVideoJob } from "../db/videoJobs";
 import { emit, EV_VIDEO_STATUS } from "../lib/events";
 import type { ApiKeyRow } from "../db/apiKeys";
-import type { ChatRequest, ImageRequest, Provider, VideoRequest } from "../providers/types";
+import type { ChatRequest, ImageRequest, Provider, StreamEvent, VideoRequest } from "../providers/types";
 
 // `apiKey` is set by the middleware when a request presents a valid key; it's
 // consumed by the handlers below for scope enforcement and by the logging tap
@@ -260,18 +261,126 @@ function maybeCaptureCL4udeHeaders(c: { req: { raw: Request } }): void {
   }
 }
 
+// [HH:MM:SS] timestamp for combo trace lines. Matches proxyLog.ts format.
+function comboTs(): string {
+  const d = new Date();
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `[${h}:${m}:${s}]`;
+}
+
+// Fallback runner: try each combo model in order until one succeeds. Wraps
+// the caller's per-model resolve+run so we don't couple to a specific wire
+// format — /v1/chat/completions (0penAI shape) and /v1/messages (remove
+// shape) each pass their own runOne closure.
+//
+// On failure, aggregates attempts across every tried model into a single
+// synthetic NoAccountError so the existing rateLimitedFailure classifier
+// picks the soonest reset across the whole fan-out. When ANY tried model
+// throws a non-NoAccountError (upstream 5xx / abort), that's re-thrown
+// immediately — we don't paper over real errors by silently trying next.
+async function runCombo(
+  comboName: string,
+  models: string[],
+  runOne: (modelStr: string) => Promise<{ stream: AsyncGenerator<StreamEvent> }>
+): Promise<{ stream: AsyncGenerator<StreamEvent>; resolvedModel: string }> {
+  const allAttempts: import("../proxy").Attempt[] = [];
+  let lastNoAccount: NoAccountError | null = null;
+  let lastResolveError: Response | null = null;
+
+  for (let i = 0; i < models.length; i++) {
+    const modelStr = models[i];
+    console.info(`${comboTs()} 🎲 [COMBO:${comboName}] Trying ${i + 1}/${models.length}: ${modelStr}`);
+
+    try {
+      const result = await runOne(modelStr);
+      console.info(`${comboTs()} 🎲 [COMBO:${comboName}] Model ${modelStr} succeeded`);
+      return { stream: result.stream, resolvedModel: modelStr };
+    } catch (e) {
+      if (e instanceof NoAccountError) {
+        lastNoAccount = e;
+        for (const a of e.attempts) allAttempts.push(a);
+        console.warn(`${comboTs()} 🎲 [COMBO:${comboName}] Model ${modelStr} exhausted, trying next`);
+        continue;
+      }
+      if (e instanceof Response) {
+        // resolveFn returned a validation Response (bad model shape). Track
+        // and try next — same treatment as pool exhaustion.
+        lastResolveError = e;
+        console.warn(`${comboTs()} 🎲 [COMBO:${comboName}] Model ${modelStr} invalid, trying next`);
+        continue;
+      }
+      // UpstreamError or unknown — real upstream fault, don't silently
+      // fall through. Client deserves to see the actual error.
+      throw e;
+    }
+  }
+
+  console.warn(`${comboTs()} 🎲 [COMBO:${comboName}] All ${models.length} models exhausted, giving up`);
+
+  if (lastNoAccount) {
+    // Fabricate an aggregated NoAccountError so rateLimitedFailure sees the
+    // full attempt list across every tried model. Provider name concatenated
+    // for the error detail.
+    const providers = [...new Set(allAttempts.map((a) => a.account.label))].join(",");
+    throw new NoAccountError(`combo:${comboName} (${providers})`, allAttempts);
+  }
+  if (lastResolveError) throw lastResolveError;
+  throw new Error(`combo "${comboName}" had no models to try`);
+}
+
 api.post("/v1/chat/completions", async (c) => {
   maybeCaptureCL4udeHeaders(c);
-  const r = await readBody(c);
+
+  // Peek raw JSON first so combo dispatch can inspect `model` without
+  // committing to the single-model resolve path yet.
+  let rawBody: unknown;
+  try {
+    rawBody = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  const bodyModel =
+    typeof rawBody === "object" && rawBody !== null
+      ? (rawBody as Record<string, unknown>).model
+      : undefined;
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const saver = tokenSaverEnabled(c);
+
+  const combo = typeof bodyModel === "string" ? getComboByName(bodyModel) : undefined;
+  if (combo) {
+    try {
+      const wantStream = (rawBody as Record<string, unknown>).stream === true;
+      const { stream, resolvedModel } = await runCombo(
+        combo.name,
+        combo.models,
+        async (modelStr) => {
+          const swapped = { ...(rawBody as Record<string, unknown>), model: modelStr };
+          const r = resolve(swapped);
+          if (r instanceof Response) throw r;
+          r.requestedModel = combo.name;
+          const s = enforceKeyScope(key, r.providerName, r.model);
+          if (s) throw s;
+          const req = toCanonical(swapped as unknown as OpenAIBody, r.model);
+          return run(r, req, c.req.raw.signal, saver, key);
+        }
+      );
+      return wantStream ? toSSE(stream, resolvedModel) : await toCompletion(stream, resolvedModel);
+    } catch (e) {
+      return upstreamFailure(e);
+    }
+  }
+
+  const r = resolve(rawBody);
   if (r instanceof Response) return r;
 
-  const key = c.get("apiKey") as ApiKeyRow | undefined;
   const scoped = enforceKeyScope(key, r.providerName, r.model);
   if (scoped) return scoped;
 
   const req = toCanonical(r.body as unknown as OpenAIBody, r.model);
   try {
-    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c), key);
+    const { stream } = await run(r, req, c.req.raw.signal, saver, key);
     return req.stream ? toSSE(stream, r.model) : await toCompletion(stream, r.model);
   } catch (e) {
     return upstreamFailure(e);
@@ -282,16 +391,57 @@ api.post("/v1/chat/completions", async (c) => {
 // conversion and the response rendering differ.
 api.post("/v1/messages", async (c) => {
   maybeCaptureCL4udeHeaders(c);
-  const r = await readBody(c);
+
+  let rawBody: unknown;
+  try {
+    rawBody = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  const bodyModel =
+    typeof rawBody === "object" && rawBody !== null
+      ? (rawBody as Record<string, unknown>).model
+      : undefined;
+  const key = c.get("apiKey") as ApiKeyRow | undefined;
+  const saver = tokenSaverEnabled(c);
+
+  const combo = typeof bodyModel === "string" ? getComboByName(bodyModel) : undefined;
+  if (combo) {
+    try {
+      const wantStream = (rawBody as Record<string, unknown>).stream === true;
+      const { stream } = await runCombo(
+        combo.name,
+        combo.models,
+        async (modelStr) => {
+          const swapped = { ...(rawBody as Record<string, unknown>), model: modelStr };
+          const r = resolve(swapped);
+          if (r instanceof Response) throw r;
+          r.requestedModel = combo.name;
+          const s = enforceKeyScope(key, r.providerName, r.model);
+          if (s) throw s;
+          const req = toCanonicalFromAnthropic(swapped as unknown as AnthropicBody, r.model);
+          return run(r, req, c.req.raw.signal, saver, key);
+        }
+      );
+      // Echo the combo name back (Code Assistant validates response.model
+      // against the request model), not the fallback that actually served.
+      return wantStream
+        ? toAnthropicSSE(stream, combo.name)
+        : await toAnthropicMessage(stream, combo.name);
+    } catch (e) {
+      return upstreamFailure(e);
+    }
+  }
+
+  const r = resolve(rawBody);
   if (r instanceof Response) return r;
 
-  const key = c.get("apiKey") as ApiKeyRow | undefined;
   const scoped = enforceKeyScope(key, r.providerName, r.model);
   if (scoped) return scoped;
 
   const req = toCanonicalFromAnthropic(r.body as unknown as AnthropicBody, r.model);
   try {
-    const { stream } = await run(r, req, c.req.raw.signal, tokenSaverEnabled(c), key);
+    const { stream } = await run(r, req, c.req.raw.signal, saver, key);
     // Echo the client-sent model, not the canonical upstream name — Anthropic
     // clients (Claude Code) validate the response.model against their
     // whitelist, so `claude-opus-4.7-1m` (upstream) would fail even though

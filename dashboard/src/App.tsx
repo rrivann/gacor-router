@@ -8,6 +8,7 @@ import Models from "./pages/Models";
 import Settings from "./pages/Settings";
 import Tunnel from "./pages/Tunnel";
 import Filters from "./pages/Filters";
+import Combos from "./pages/Combos";
 import ApiKeys from "./pages/ApiKeys";
 import Videos from "./pages/Videos";
 import ConsoleLogs from "./pages/ConsoleLogs";
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="models" element={<Models />} />
         <Route path="videos" element={<Videos />} />
         <Route path="filters" element={<Filters />} />
+        <Route path="combos" element={<Combos />} />
         <Route path="api-keys" element={<ApiKeys />} />
         <Route path="tunnel" element={<Tunnel />} />
         <Route path="settings" element={<Settings />} />

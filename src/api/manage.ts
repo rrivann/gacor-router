@@ -64,6 +64,14 @@ import {
 } from "../db/apiKeys";
 import { generateApiKeySecret, invalidateApiKeyCache } from "../lib/apiKeyAuth";
 import { listVideoJobs, getVideoJob, deleteVideoJob } from "../db/videoJobs";
+import {
+  createCombo,
+  deleteCombo,
+  getComboById,
+  getComboByName,
+  listCombos,
+  updateCombo,
+} from "../db/combos";
 import { clearConsoleLogs, getConsoleLogs } from "../lib/consoleLog";
 import { unlinkSync, existsSync } from "node:fs";
 import {
@@ -786,6 +794,97 @@ manage.delete("/keys/:id", (c) => {
   const id = Number(c.req.param("id"));
   if (!deleteApiKey(id)) return errorResponse(404, "invalid_request_error", `key #${id} not found`);
   invalidateApiKeyCache();
+  return c.json({ ok: true });
+});
+
+// ── Combos ───────────────────────────────────────────────────────
+// A combo is a named ordered list of `provider/model` strings the router
+// falls back through when a client sends the combo name as its model.
+// Sits alongside the model alias table but is functionally different —
+// aliases are 1:1 renames, combos are 1:N fallback chains.
+
+function normalizeComboModels(v: unknown): { ok: true; value: string[] } | { ok: false; err: string } {
+  if (!Array.isArray(v)) return { ok: false, err: "`models` must be an array of provider/model strings" };
+  const out: string[] = [];
+  for (const raw of v) {
+    if (typeof raw !== "string") return { ok: false, err: "`models` entries must be strings" };
+    const s = raw.trim();
+    if (!s) continue;
+    if (s.indexOf("/") <= 0 || s.indexOf("/") === s.length - 1) {
+      return { ok: false, err: `"${s}" — model must be in provider/model format` };
+    }
+    out.push(s);
+  }
+  if (out.length < 2) return { ok: false, err: "`models` needs at least 2 entries — a 1-model combo is just an alias" };
+  return { ok: true, value: out };
+}
+
+manage.get("/combos", (c) => {
+  return c.json({ data: listCombos() });
+});
+
+manage.post("/combos", async (c) => {
+  let body: { name?: unknown; models?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) return errorResponse(400, "invalid_request_error", "`name` must be a non-empty string", "name");
+  if (name.includes("/")) {
+    return errorResponse(400, "invalid_request_error", "combo names must not contain '/' (that's for provider/model routing)", "name");
+  }
+  if (getComboByName(name)) {
+    return errorResponse(409, "invalid_request_error", `combo "${name}" already exists`, "name");
+  }
+  const models = normalizeComboModels(body.models);
+  if (!models.ok) return errorResponse(400, "invalid_request_error", models.err, "models");
+  try {
+    const row = createCombo(name, models.value);
+    return c.json(row);
+  } catch (e) {
+    return errorResponse(500, "internal_error", e instanceof Error ? e.message : String(e));
+  }
+});
+
+manage.patch("/combos/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  const existing = getComboById(id);
+  if (!existing) return errorResponse(404, "invalid_request_error", `combo #${id} not found`);
+
+  let body: { name?: unknown; models?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return errorResponse(400, "invalid_request_error", "invalid JSON body");
+  }
+
+  const patch: { name?: string; models?: string[] } = {};
+  if (typeof body.name === "string") {
+    const name = body.name.trim();
+    if (!name) return errorResponse(400, "invalid_request_error", "`name` must be non-empty", "name");
+    if (name.includes("/")) {
+      return errorResponse(400, "invalid_request_error", "combo names must not contain '/'", "name");
+    }
+    if (name !== existing.name) {
+      const clash = getComboByName(name);
+      if (clash) return errorResponse(409, "invalid_request_error", `combo "${name}" already exists`, "name");
+    }
+    patch.name = name;
+  }
+  if ("models" in body) {
+    const m = normalizeComboModels(body.models);
+    if (!m.ok) return errorResponse(400, "invalid_request_error", m.err, "models");
+    patch.models = m.value;
+  }
+  const row = updateCombo(id, patch);
+  return row ? c.json(row) : errorResponse(500, "internal_error", "update failed");
+});
+
+manage.delete("/combos/:id", (c) => {
+  const id = Number(c.req.param("id"));
+  if (!deleteCombo(id)) return errorResponse(404, "invalid_request_error", `combo #${id} not found`);
   return c.json({ ok: true });
 });
 

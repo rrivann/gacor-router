@@ -110,6 +110,14 @@ new Database(dbPath).exec(`
   );
   INSERT INTO accounts (provider,label,secret,status,created_at)
     VALUES ('codebuddy','acc-1','token-1','active',0);
+
+  CREATE TABLE combos (
+    id integer primary key autoincrement,
+    name text not null unique,
+    models text not null,
+    created_at integer not null,
+    updated_at integer not null
+  );
 `);
 
 const { api } = await import("../src/api");

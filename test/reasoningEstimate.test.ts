@@ -112,6 +112,14 @@ new Database(dbPath).exec(`
     created_at integer not null,
     updated_at integer not null
   );
+
+  CREATE TABLE combos (
+    id integer primary key autoincrement,
+    name text not null unique,
+    models text not null,
+    created_at integer not null,
+    updated_at integer not null
+  );
 `);
 
 const { loggingTap } = await import("../src/lib/logging");

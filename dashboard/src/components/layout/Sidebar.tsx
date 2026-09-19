@@ -10,6 +10,7 @@ import {
   Globe,
   MessagesSquare,
   Filter,
+  Shuffle,
   KeyRound,
   Film,
   Terminal,
@@ -38,6 +39,7 @@ const sections: { title: string; items: NavItem[] }[] = [
       { label: "Videos", path: "/videos", icon: Film },
       { label: "Accounts", path: "/accounts", icon: Users },
       { label: "Models", path: "/models", icon: Cpu },
+      { label: "Combos", path: "/combos", icon: Shuffle },
     ],
   },
   {

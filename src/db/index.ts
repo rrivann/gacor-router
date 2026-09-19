@@ -32,4 +32,17 @@ export function ensureSchema(): void {
       sqlite.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.type}`);
     }
   }
+  // New tables added after v0.3.16. Idempotent — the IF NOT EXISTS clause
+  // makes this a no-op on fresh installs (drizzle already created it) and
+  // on already-migrated in-place upgrades.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS combos (
+      id integer primary key autoincrement,
+      name text not null unique,
+      models text not null,
+      created_at integer not null,
+      updated_at integer not null
+    );
+    CREATE INDEX IF NOT EXISTS idx_combos_name ON combos(name);
+  `);
 }

@@ -412,6 +412,29 @@ export const updateApiKey = (
 export const deleteApiKey = (id: number) =>
   fetchApi<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" });
 
+// ── Combos ───────────────────────────────────────────────────────
+
+export interface Combo {
+  id: number;
+  name: string;
+  models: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const fetchCombos = () => fetchApi<{ data: Combo[] }>("/api/combos");
+
+export const createCombo = (row: { name: string; models: string[] }) =>
+  fetchApi<Combo>("/api/combos", { method: "POST", body: JSON.stringify(row) });
+
+export const updateCombo = (
+  id: number,
+  patch: Partial<Pick<Combo, "name" | "models">>
+) => fetchApi<Combo>(`/api/combos/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+
+export const deleteCombo = (id: number) =>
+  fetchApi<{ ok: boolean }>(`/api/combos/${id}`, { method: "DELETE" });
+
 // ── Console logs ─────────────────────────────────────────────────
 
 export const fetchConsoleLogs = () => fetchApi<{ data: string[] }>("/api/console-logs");

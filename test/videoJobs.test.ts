@@ -113,6 +113,14 @@ new Database(dbPath).exec(`
   );
   INSERT INTO accounts (provider,label,secret,status,created_at)
     VALUES ('codebuddy','vid-acc','token-1','active',0);
+
+  CREATE TABLE combos (
+    id integer primary key autoincrement,
+    name text not null unique,
+    models text not null,
+    created_at integer not null,
+    updated_at integer not null
+  );
 `);
 
 // AFTER DB_PATH — same rule as apiKeys.test.ts.

@@ -234,6 +234,30 @@ export const videoJobs = sqliteTable(
   ]
 );
 
+// Model combos — a client sends `model: "smart-combo"` (bare, no `provider/`
+// prefix) and the router tries each entry in `models` in order until one
+// succeeds. Turns "claude-opus first, glm-5.2 as fallback" into a single
+// address the client keeps hardcoded, so pool exhaustion on one model doesn't
+// interrupt work — the next model picks up. See 9router's `services/combo.js`
+// for the pattern that inspired this.
+export const combos = sqliteTable(
+  "combos",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull().unique(),
+    // JSON array of `provider/model` strings. Ordered — index 0 is the
+    // primary, subsequent entries are fallbacks tried on failure.
+    models: text("models", { mode: "json" }).$type<string[]>().notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [index("idx_combos_name").on(t.name)]
+);
+
 // Singleton row for the dashboard login credential + its JWT signing secret.
 // Zero rows means "no password configured yet" — the auth middleware treats
 // that as open-gateway so a fresh install can reach /api/* to bootstrap.
