@@ -21,6 +21,24 @@ function statusVariant(status: string, httpStatus: number | null): "success" | "
   return "error";
 }
 
+// Cache-hit % is a valid credit-saving signal for some upstream/model pairs
+// and cosmetic for others — CodeBuddy's tiered pricing works for
+// glm-family (empirically 2.7x cheaper cached vs uncached), but claude
+// requests via CodeBuddy pay ~flat credit regardless of cache hit
+// (verified 2026-09-19 across 46 rows: 5.64 credit turn-1 miss vs 5.95
+// credit turn-N 98% hit). Attach a tooltip so users don't optimize
+// workflow around a metric the upstream doesn't actually discount.
+function cacheHintTooltip(model: string | null): string {
+  if (!model) return "";
+  if (model.startsWith("claude-")) {
+    return "CodeBuddy bills claude requests at ~flat credit regardless of cache hit — badge is informational only, not a credit-saving signal";
+  }
+  if (model.startsWith("glm-")) {
+    return "Cache hit reduces credit for glm-family (empirically ~2.7x cheaper cached vs uncached)";
+  }
+  return "Cache hit typically reduces credit, though pricing varies by upstream";
+}
+
 export default function Requests() {
   const [logs, setLogs] = useState<RequestLogRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,7 +214,10 @@ export default function Requests() {
                       <span className="inline-flex items-baseline gap-1.5">
                         <span>{formatTokens(l.cachedTokens)}</span>
                         {l.promptTokens != null && l.promptTokens > 0 && (
-                          <span className="text-[10px] tabular-nums text-muted-foreground/70">
+                          <span
+                            className="text-[10px] tabular-nums text-muted-foreground/70"
+                            title={cacheHintTooltip(l.model)}
+                          >
                             {Math.round(
                               ((l.cachedTokens - (l.cacheWriteTokens ?? 0)) / l.promptTokens) * 100
                             )}%
@@ -216,7 +237,10 @@ export default function Requests() {
                   <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
                     {formatDuration(l.durationMs)}
                   </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">
+                  <td
+                    className="px-4 py-2.5 text-right tabular-nums"
+                    title="Credit reported by CodeBuddy at request time — direct pass-through, not computed"
+                  >
                     {l.creditUsed != null && l.creditUsed > 0 ? (
                       <span className="text-primary">{l.creditUsed.toFixed(2)}</span>
                     ) : (
@@ -296,6 +320,7 @@ export default function Requests() {
                     selected.cachedTokens != null
                       ? selected.cachedTokens - (selected.cacheWriteTokens ?? 0)
                       : null,
+                  tooltip: cacheHintTooltip(selected.model),
                 },
                 { label: "Cache Write", value: selected.cacheWriteTokens },
                 { label: "Out", value: selected.completionTokens },
@@ -306,10 +331,22 @@ export default function Requests() {
                 },
                 { label: "TTFT", value: selected.ttftMs, unit: "ms" as const },
                 { label: "Latency", value: selected.durationMs, unit: "ms" as const },
-                { label: "Credit", value: selected.creditUsed, credit: true },
+                {
+                  label: "Credit",
+                  value: selected.creditUsed,
+                  credit: true,
+                  tooltip: "Credit reported by CodeBuddy at request time — direct pass-through, not computed by router",
+                },
                 { label: "USD ~", value: selected.dollarCost, dollar: true },
               ].map((s) => (
-                <div key={s.label} className="rounded-md border border-border bg-background p-3">
+                <div
+                  key={s.label}
+                  className={cn(
+                    "rounded-md border border-border bg-background p-3",
+                    s.tooltip && "cursor-help"
+                  )}
+                  title={s.tooltip || undefined}
+                >
                   <div className={cn("text-lg font-bold tabular-nums", (s.credit || s.dollar) && s.value ? "text-primary" : "")}>
                     {s.value != null
                       ? s.credit
