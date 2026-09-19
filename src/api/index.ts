@@ -291,6 +291,7 @@ async function runCombo(
 
   for (let i = 0; i < models.length; i++) {
     const modelStr = models[i];
+    if (!modelStr) continue;
     console.info(`${comboTs()} 🎲 [COMBO:${comboName}] Trying ${i + 1}/${models.length}: ${modelStr}`);
 
     try {
