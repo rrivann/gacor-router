@@ -89,6 +89,20 @@ bun test
 
 ## Uninstall
 
+One-liner (mirrors the installer):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rrivann/gacor-router/main/uninstall.sh | bash
+```
+
+Stops the service, removes the systemd unit, deletes the install dir
+(accounts, keys, request logs, videos) plus the cached cloudflared binary
+and tunnel state. Bun is kept by default — append `--remove-bun` to take
+it too. Flags: `--prefix DIR` (match a non-default install location),
+`--remove-bun`, `--yes` (skip the confirmation prompt).
+
+The manual equivalent, if you prefer:
+
 ```bash
 systemctl stop gacor-router
 sudo rm /etc/systemd/system/gacor-router.service

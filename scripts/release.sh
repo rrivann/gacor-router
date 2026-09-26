@@ -62,6 +62,7 @@ copy drizzle
 copy drizzle.config.ts
 copy systemd
 copy package.json
+copy uninstall.sh
 copy bun.lock
 copy tsconfig.json
 copy README.md
